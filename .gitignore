@@ -1,4 +1,4 @@
-﻿# Global Git ignore for local workspace artifacts
+# Global Git ignore for local workspace artifacts
 
 *.log
 *.tmp
@@ -27,3 +27,7 @@ Thumbs.db
 /input/
 /floodfill-test-01-preview.jpg
 /floodfill-test-01.png
+
+# Local build outputs
+/build/
+/dist/

@@ -1,4 +1,4 @@
-﻿# CutCanvas
+# CutCanvas
 
 > 说明：这是一个以个人使用为定位、由纯 AI 辅助制作与开发的项目，主要使用 GPT-5.4 进行设计、代码生成和迭代。项目目前仍在持续更新中。
 
@@ -134,3 +134,23 @@ powershell -ExecutionPolicy Bypass -File .\run_self_test.ps1 --input .\some.jpg 
 - 详细使用手册：`docs/桌面程序详细使用手册.md`
 - 架构说明：`docs/architecture.md`
 
+
+
+## ?????
+
+?????????????
+
+- `assets/branding/cutcanvas-icon.png`
+- `assets/branding/cutcanvas.ico`
+- `assets/branding/cutcanvas-splash.png`
+
+?? Windows ????????
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
+```
+
+?????
+
+- ????`dist/CutCanvas/CutCanvas.exe`
+- ????`dist/installer/CutCanvas-Setup.exe`

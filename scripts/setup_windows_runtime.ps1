@@ -1,4 +1,4 @@
-﻿param(
+param(
   [switch]$IncludeOpenVINO = $true,
   [switch]$IncludeNvidia = $false,
   [switch]$ForceReinstall = $false
@@ -8,7 +8,21 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $pythonBootstrap = Join-Path $root '.venv\Scripts\python.exe'
 if (-not (Test-Path $pythonBootstrap)) {
-  throw "Bootstrap Python not found at $pythonBootstrap. Create the project .venv first or install Python 3.12."
+  $fallbackPython = Get-Command py -ErrorAction SilentlyContinue
+  if ($fallbackPython) {
+    & py -3.12 -m venv (Join-Path $root '.venv')
+  } else {
+    $fallbackPython = Get-Command python -ErrorAction SilentlyContinue
+    if ($fallbackPython) {
+      & python -m venv (Join-Path $root '.venv')
+    } else {
+      throw "Bootstrap Python not found at $pythonBootstrap and no system Python launcher was detected. Install Python 3.12 or create the project .venv first."
+    }
+  }
+  $pythonBootstrap = Join-Path $root '.venv\Scripts\python.exe'
+  if (-not (Test-Path $pythonBootstrap)) {
+    throw "Failed to create bootstrap Python at $pythonBootstrap."
+  }
 }
 
 function Ensure-Venv([string]$Path) {

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .catalog import MODEL_MAP
-from .config import RUNTIME_ROOT
+from .config import RUNTIME_ROOT, WORKSPACE_ROOT
 from .hardware import detect_hardware_profile
 from .history import HistoryStore
 from .models import BatchRunRequest, ExecutionResult, SingleRunRequest, SmartRunRequest
@@ -116,7 +116,7 @@ class LocalExecutor:
     def _run(self, command: list[str]) -> ExecutionResult:
         completed = subprocess.run(
             command,
-            cwd=str(PROJECT_ROOT),
+            cwd=str(WORKSPACE_ROOT),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -463,3 +463,4 @@ class LocalExecutor:
                 result=result,
             )
         return result
+

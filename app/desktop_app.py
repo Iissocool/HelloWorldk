@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import threading
 from queue import Empty, Queue
@@ -6,7 +6,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from PIL import Image, ImageTk
+
 from .catalog import MODEL_CATALOG
+from .config import ICON_ICO, ICON_PNG, SPLASH_PNG
 from .executor import ExecutionError, LocalExecutor
 from .hardware import detect_hardware_profile
 from .history import HistoryStore
@@ -24,6 +27,7 @@ class DesktopApp:
         self.root.title("CutCanvas")
         self.root.geometry("1380x900")
         self.root.minsize(1180, 760)
+        self._icon_image = None
 
         self.history_store = HistoryStore()
         self.executor = LocalExecutor(self.history_store)
@@ -55,10 +59,24 @@ class DesktopApp:
         self.smart_recurse_var = tk.BooleanVar(value=False)
         self.smart_include_generated_var = tk.BooleanVar(value=False)
 
+        self._apply_window_icon()
         self._build_ui()
         self._refresh_dashboard()
         self._refresh_history()
         self.root.after(150, self._poll_queue)
+
+    def _apply_window_icon(self) -> None:
+        if ICON_PNG.exists():
+            try:
+                self._icon_image = ImageTk.PhotoImage(Image.open(ICON_PNG))
+                self.root.iconphoto(True, self._icon_image)
+            except Exception:
+                self._icon_image = None
+        if ICON_ICO.exists():
+            try:
+                self.root.iconbitmap(str(ICON_ICO))
+            except tk.TclError:
+                pass
 
     def _build_ui(self) -> None:
         style = ttk.Style()
@@ -413,9 +431,54 @@ class DesktopApp:
         return "\n".join(chunks)
 
 
+def _center_window(window: tk.Toplevel | tk.Tk, width: int, height: int) -> None:
+    screen_width = window.winfo_screenwidth()
+    screen_height = window.winfo_screenheight()
+    x = int((screen_width - width) / 2)
+    y = int((screen_height - height) / 2)
+    window.geometry(f"{width}x{height}+{x}+{y}")
+
+
+def show_splash(root: tk.Tk) -> tk.Toplevel | None:
+    if not SPLASH_PNG.exists():
+        return None
+
+    root.withdraw()
+    splash = tk.Toplevel(root)
+    splash.overrideredirect(True)
+    splash.configure(bg="#0d2030")
+    splash.attributes("-topmost", True)
+
+    image = Image.open(SPLASH_PNG).convert("RGBA")
+    photo = ImageTk.PhotoImage(image)
+    splash._photo_ref = photo
+    width, height = image.size
+    _center_window(splash, width, height)
+
+    label = tk.Label(splash, image=photo, borderwidth=0, highlightthickness=0)
+    label.pack(fill="both", expand=True)
+
+    splash.update_idletasks()
+    splash.update()
+    return splash
+
+
+def close_splash(root: tk.Tk, splash: tk.Toplevel | None) -> None:
+    if splash is not None:
+        splash.destroy()
+    root.deiconify()
+    root.lift()
+    root.focus_force()
+
+
 def main() -> None:
     root = tk.Tk()
+    splash = show_splash(root)
     DesktopApp(root)
+    if splash is not None:
+        root.after(900, lambda: close_splash(root, splash))
+    else:
+        close_splash(root, splash)
     root.mainloop()
 
 
