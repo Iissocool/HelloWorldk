@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 
 
 LicenseClass = Literal[
-    "commercial-ok",
-    "commercial-review",
-    "commercial-agreement-required",
+    "personal-use",
+    "personal-use-review",
+    "personal-use-restricted",
 ]
 BackendId = Literal[
     "auto",

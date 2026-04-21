@@ -1,1 +1,1 @@
-﻿"""Desktop and web app package for the commercial background workflow."""
+﻿"""Desktop and web app package for the personal background workflow."""

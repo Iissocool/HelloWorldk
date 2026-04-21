@@ -15,7 +15,7 @@ from .hardware import detect_hardware_profile
 
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Commercial Background Desktop Console", version="0.2.0")
+app = FastAPI(title="Background Desktop App Console", version="0.2.1")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 executor = LocalExecutor()
@@ -156,3 +156,4 @@ def run_smart(
 @app.get("/refresh")
 def refresh() -> RedirectResponse:
     return RedirectResponse(url="/", status_code=303)
+

@@ -1,12 +1,12 @@
-﻿# Commercial Background Desktop Architecture
+﻿# Background Desktop App Architecture
 
-这份文档记录当前桌面版的实际结构。目标不是把现有脚本做成一个临时小工具，而是逐步推进为一个可商用、可分发、能自动识别硬件并最大化利用 GPU 的本地抠图产品。
+这份文档记录当前桌面版的实际结构。这个项目当前以个人使用为定位，由纯 AI 辅助制作与开发，主要使用 GPT-5.4 进行设计、代码生成和迭代，目前仍在持续更新中。
 
 ## 当前版本已经落地的模块
 
 1. 硬件探测：识别 OS、CPU、内存、GPU 厂商与显卡名
 2. 后端规划：根据 NVIDIA / AMD / Intel 与 Windows / Linux 自动生成推荐后端顺序
-3. 模型注册表：为 16 个 rembg 模型记录类别、质量、速度与商用状态
+3. 模型注册表：为 16 个 rembg 模型记录类别、质量、速度与个人使用提示
 4. 多后端执行器：统一调度 `DirectML / OpenVINO / CUDA / TensorRT / CPU`
 5. AMD Windows 路线：显式 `amd` 后端，当前落到 `DirectML`
 6. 历史记录：把任务摘要、stdout、stderr、报告路径写入 SQLite
@@ -66,7 +66,7 @@ Self Test
 这是工程权衡，不是偷懒：
 
 - ONNX Runtime 在 Windows 上对 AMD 最现实的通用路线是 `DirectML`
-- DirectML 覆盖面广，部署成本低，适合桌面商用品
+- DirectML 覆盖面广，部署成本低，适合个人桌面使用
 - Linux AMD 的高阶路线会更偏向 `MIGraphX`
 
 ## 初始化流程

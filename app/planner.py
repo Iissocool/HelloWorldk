@@ -41,7 +41,7 @@ def build_runtime_plan() -> RuntimePlan:
     if system == "windows":
         if primary_vendor == "nvidia":
             plans = [
-                BackendPlan(backend="tensorrt", priority=1, rationale="Highest-performance NVIDIA path for commercial Windows builds."),
+                BackendPlan(backend="tensorrt", priority=1, rationale="Highest-performance NVIDIA path for personal Windows deployments."),
                 BackendPlan(backend="cuda", priority=2, rationale="General NVIDIA GPU fallback when TensorRT is unavailable."),
                 BackendPlan(backend="directml", priority=3, rationale="Broad DX12 fallback on Windows."),
                 BackendPlan(backend="cpu", priority=4, rationale="Safe universal fallback."),
@@ -82,3 +82,4 @@ def build_runtime_plan() -> RuntimePlan:
         notes.append("AMD ROCm EP is deprecated in ONNX Runtime; production Linux AMD work should move to MIGraphX.")
 
     return RuntimePlan(detected_vendor=primary_vendor, recommended_stack=plans, notes=notes)
+

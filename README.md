@@ -1,13 +1,15 @@
 ﻿# Background Desktop App
 
+> 说明：这是一个以个人使用为定位、由纯 AI 辅助制作与开发的项目，主要使用 GPT-5.4 进行设计、代码生成和迭代。项目目前仍在持续更新中。
+
 这个项目现在包含两部分：
 
 1. 原有的平板壳背景替换工作流
-2. 新增的本地商用抠图桌面程序
+2. 新增的本地个人使用抠图桌面程序
 
 ## 目标
 
-把 `rembg + ONNX Runtime` 封装成一个可商用扩展的 Windows-first 桌面工具，能够：
+把 `rembg + ONNX Runtime` 封装成一个以个人使用为主的 Windows-first 桌面工具，能够：
 
 - 自动识别 GPU 厂商
 - 自动选择更适合的执行后端
@@ -49,9 +51,11 @@
 
 ### 1. 克隆项目
 
+由于 GitHub 仓库名结尾带 `.`，Windows 默认目录名不太友好，建议克隆时显式指定本地目录名：
+
 ```powershell
-git clone <your-repo-url>
-cd HelloWorldk
+git clone https://github.com/Iissocool/Background-Desktop-App. Background-Desktop-App
+cd Background-Desktop-App
 ```
 
 ### 2. 准备本地 `.venv`
@@ -115,15 +119,15 @@ powershell -ExecutionPolicy Bypass -File .\run_self_test.ps1 --input .\some.jpg 
 - `tensorrt`: NVIDIA 更高性能路线
 - `cpu`: 通用兜底路线
 
-## 模型授权提醒
+## 个人使用提醒
 
-代码框架可以商用推进，但模型权重授权要逐个审计。
+当前仓库定位为个人使用，模型权重和数据来源仍然建议逐项了解清楚。
 
 尤其是：
 
-- `rembg` 代码本身可以商用
-- 不同模型的权重来源和数据集授权不相同
-- `BRIA RMBG` 建议通过 BRIA 商业授权方案使用
+- `rembg` 代码本身较宽松，但不同模型的权重来源并不完全一致
+- 不同模型的数据集、权重和再分发条件不相同
+- `BRIA RMBG` 等模型在更广泛使用前，建议先确认其官方条款
 
 ## 文档
 
