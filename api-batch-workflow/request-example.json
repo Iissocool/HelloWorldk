@@ -1,7 +1,8 @@
 {
-  "inputDir": "C:\\Users\\F1736\\Documents\\New project\\tablet-case-background-workflow\\input",
-  "outputDir": "C:\\Users\\F1736\\Documents\\New project\\tablet-case-background-workflow\\api-batch-workflow\\output",
-  "maskConfigPath": "C:\\Users\\F1736\\Documents\\New project\\tablet-case-background-workflow\\api-batch-workflow\\product_masks.json",
+  "repoRoot": "C:\\path\\to\\HelloWorldk",
+  "inputDir": "C:\\path\\to\\HelloWorldk\\input",
+  "outputDir": "C:\\path\\to\\HelloWorldk\\api-batch-workflow\\output",
+  "maskConfigPath": "C:\\path\\to\\HelloWorldk\\api-batch-workflow\\product_masks.json",
   "prompt": "Replace only the background and all descriptive marketing text outside the tablet case. Use a clean premium ecommerce lifestyle backdrop with subtle tablet-accessory scene accents. No logos, no added text, no watermark.",
   "model": "gpt-image-1",
   "workers": 2,
