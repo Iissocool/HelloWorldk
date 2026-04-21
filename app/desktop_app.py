@@ -21,7 +21,7 @@ MODEL_CHOICES = [model.id for model in MODEL_CATALOG]
 class DesktopApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Background Desktop App")
+        self.root.title("CutCanvas")
         self.root.geometry("1380x900")
         self.root.minsize(1180, 760)
 
@@ -72,7 +72,7 @@ class DesktopApp:
 
         header = ttk.Frame(outer)
         header.pack(fill="x", pady=(0, 10))
-        ttk.Label(header, text="Background Desktop App", font=("Segoe UI Semibold", 18)).pack(side="left")
+        ttk.Label(header, text="CutCanvas", font=("Segoe UI Semibold", 18)).pack(side="left")
         ttk.Button(header, text="刷新硬件", command=self._refresh_hardware).pack(side="right")
 
         notebook = ttk.Notebook(outer)
@@ -421,4 +421,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 

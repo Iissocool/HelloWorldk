@@ -1,4 +1,4 @@
-﻿# Background Desktop App
+﻿# CutCanvas
 
 > 说明：这是一个以个人使用为定位、由纯 AI 辅助制作与开发的项目，主要使用 GPT-5.4 进行设计、代码生成和迭代。项目目前仍在持续更新中。
 
@@ -54,8 +54,8 @@
 由于 GitHub 仓库名结尾带 `.`，Windows 默认目录名不太友好，建议克隆时显式指定本地目录名：
 
 ```powershell
-git clone https://github.com/Iissocool/Background-Desktop-App. Background-Desktop-App
-cd Background-Desktop-App
+git clone https://github.com/Iissocool/CutCanvas.git CutCanvas
+cd CutCanvas
 ```
 
 ### 2. 准备本地 `.venv`
@@ -133,3 +133,4 @@ powershell -ExecutionPolicy Bypass -File .\run_self_test.ps1 --input .\some.jpg 
 
 - 详细使用手册：`docs/桌面程序详细使用手册.md`
 - 架构说明：`docs/architecture.md`
+

@@ -1,4 +1,4 @@
-﻿# Background Desktop App Architecture
+﻿# CutCanvas Architecture
 
 这份文档记录当前桌面版的实际结构。这个项目当前以个人使用为定位，由纯 AI 辅助制作与开发，主要使用 GPT-5.4 进行设计、代码生成和迭代，目前仍在持续更新中。
 
@@ -118,3 +118,4 @@ Self Test
 3. 更细的 NVIDIA / Intel / AMD 参数模板
 4. Linux AMD 的 MIGraphX 实机集成
 5. 模型下载、校验和授权开关
+
