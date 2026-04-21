@@ -1,0 +1,204 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Commercial Background Desktop Console</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Commercial Background Desktop Console</p>
+        <h1>本地抠图桌面引擎控制台</h1>
+        <p class="lead">这版已经把桌面应用、任务历史、Intel OpenVINO 执行器和 NVIDIA 执行器接成统一调度层。Web 页面现在更多是一个辅助控制台，核心使用入口会是桌面窗口。</p>
+      </div>
+      <a class="ghost-button" href="/refresh">刷新硬件信息</a>
+    </section>
+
+    {% if error %}
+    <section class="card error">{{ error }}</section>
+    {% endif %}
+
+    <section class="grid two">
+      <article class="card">
+        <h2>硬件画像</h2>
+        <p><strong>系统：</strong>{{ hardware.os }} / {{ hardware.os_version }}</p>
+        <p><strong>CPU：</strong>{{ hardware.cpu_name }}</p>
+        <p><strong>内存：</strong>{{ hardware.total_memory_gb }} GB</p>
+        <div class="gpu-list">
+          {% for gpu in hardware.gpus %}
+          <div class="gpu-item">
+            <strong>{{ gpu.name }}</strong>
+            <span>厂商：{{ gpu.vendor }}</span>
+            <span>显存：{{ gpu.memory_mb or '未知' }} MB</span>
+            <span>驱动：{{ gpu.driver_version or '未知' }}</span>
+          </div>
+          {% else %}
+          <p>暂未检测到可识别 GPU。</p>
+          {% endfor %}
+        </div>
+      </article>
+
+      <article class="card">
+        <h2>推荐运行栈</h2>
+        <ol class="stack-list">
+          {% for item in plan.recommended_stack %}
+          <li>
+            <strong>{{ item.backend }}</strong>
+            <span>{{ item.rationale }}</span>
+          </li>
+          {% endfor %}
+        </ol>
+        <div class="notes">
+          {% for note in plan.notes %}
+          <p>{{ note }}</p>
+          {% endfor %}
+        </div>
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>模型与商用提示</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>模型</th>
+            <th>类别</th>
+            <th>质量</th>
+            <th>速度</th>
+            <th>商用状态</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for model in models %}
+          <tr>
+            <td>{{ model.id }}</td>
+            <td>{{ model.category }}</td>
+            <td>{{ model.quality_tier }}</td>
+            <td>{{ model.speed_tier }}</td>
+            <td>{{ model.license_class }}</td>
+            <td>{{ model.license_note }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="grid three">
+      <article class="card">
+        <h2>单图处理</h2>
+        <form method="post" action="/run/single" class="form-block">
+          <label>输入图片路径<input name="input_path" placeholder="W:\images\in.jpg" required /></label>
+          <label>输出图片路径<input name="output_path" placeholder="W:\images\out.png" required /></label>
+          <label>模型
+            <select name="model">
+              {% for model in models %}<option value="{{ model.id }}">{{ model.id }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>后端
+            <select name="backend">
+              {% for backend in backends %}<option value="{{ backend }}">{{ backend }}</option>{% endfor %}
+            </select>
+          </label>
+          <button type="submit">运行单图任务</button>
+        </form>
+        {% if single_result %}
+        <p class="summary-line">{{ single_result.summary }}</p>
+        <pre>{{ single_result.stdout or single_result.stderr }}</pre>
+        {% endif %}
+      </article>
+
+      <article class="card">
+        <h2>固定模型批处理</h2>
+        <form method="post" action="/run/batch" class="form-block">
+          <label>输入目录<input name="input_dir" placeholder="W:\images\input" required /></label>
+          <label>输出目录<input name="output_dir" placeholder="W:\images\output" required /></label>
+          <label>模型
+            <select name="model">
+              {% for model in models %}<option value="{{ model.id }}">{{ model.id }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>后端
+            <select name="backend">
+              {% for backend in backends %}<option value="{{ backend }}">{{ backend }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="inline"><input type="checkbox" name="overwrite" /> 覆盖已有输出</label>
+          <label class="inline"><input type="checkbox" name="recurse" /> 递归子目录</label>
+          <label class="inline"><input type="checkbox" name="include_generated" /> 包含历史输出</label>
+          <button type="submit">运行批处理</button>
+        </form>
+        {% if batch_result %}
+        <p class="summary-line">{{ batch_result.summary }}</p>
+        <pre>{{ batch_result.stdout or batch_result.stderr }}</pre>
+        {% endif %}
+      </article>
+
+      <article class="card">
+        <h2>智能批处理</h2>
+        <form method="post" action="/run/smart" class="form-block">
+          <label>输入目录<input name="input_dir" placeholder="W:\images\input" required /></label>
+          <label>输出目录<input name="output_dir" placeholder="W:\images\output" required /></label>
+          <label>策略
+            <select name="strategy">
+              <option value="quality">quality</option>
+              <option value="balanced">balanced</option>
+              <option value="speed">speed</option>
+            </select>
+          </label>
+          <label>后端
+            <select name="backend">
+              {% for backend in backends %}<option value="{{ backend }}">{{ backend }}</option>{% endfor %}
+            </select>
+          </label>
+          <label class="inline"><input type="checkbox" name="overwrite" /> 覆盖已有输出</label>
+          <label class="inline"><input type="checkbox" name="recurse" /> 递归子目录</label>
+          <label class="inline"><input type="checkbox" name="include_generated" /> 包含历史输出</label>
+          <button type="submit">运行智能批处理</button>
+        </form>
+        {% if smart_result %}
+        <p class="summary-line">{{ smart_result.summary }}</p>
+        <pre>{{ smart_result.stdout or smart_result.stderr }}</pre>
+        {% endif %}
+      </article>
+    </section>
+
+    <section class="card">
+      <h2>最近任务</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>时间</th>
+            <th>类型</th>
+            <th>后端</th>
+            <th>模型</th>
+            <th>结果</th>
+            <th>摘要</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in history %}
+          <tr>
+            <td>{{ item.id }}</td>
+            <td>{{ item.created_at }}</td>
+            <td>{{ item.job_type }}</td>
+            <td>{{ item.backend }}</td>
+            <td>{{ item.model }}</td>
+            <td>{{ 'ok' if item.ok else 'fail' }}</td>
+            <td>{{ item.summary }}</td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7">暂时还没有历史任务。</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

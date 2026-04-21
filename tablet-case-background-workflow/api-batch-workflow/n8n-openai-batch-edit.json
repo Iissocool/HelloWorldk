@@ -1,0 +1,87 @@
+{
+  "name": "OpenAI Tablet Case Batch Edit",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "openai-tablet-case-batch-edit",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json;\nconst q = (value) => `\"${String(value).replace(/\"/g, '\\\\\"')}\"`;\nconst pythonPath = body.pythonPath || 'C:\\\\Users\\\\F1736\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python313\\\\python.exe';\nconst scriptPath = body.scriptPath || 'C:\\\\Users\\\\F1736\\\\Documents\\\\New project\\\\tablet-case-background-workflow\\\\api-batch-workflow\\\\openai_batch_edit.py';\nconst inputDir = body.inputDir;\nconst outputDir = body.outputDir || 'C:\\\\Users\\\\F1736\\\\Documents\\\\New project\\\\tablet-case-background-workflow\\\\api-batch-workflow\\\\output';\nconst maskConfigPath = body.maskConfigPath || 'C:\\\\Users\\\\F1736\\\\Documents\\\\New project\\\\tablet-case-background-workflow\\\\api-batch-workflow\\\\product_masks.json';\nconst model = body.model || 'gpt-image-1';\nconst workers = body.workers || 2;\nconst apiSize = body.apiSize || '1024x1024';\nconst inputFidelity = body.inputFidelity || 'omit';\nconst saveIntermediates = body.saveIntermediates ? '--save-intermediates' : '';\nconst dryRun = body.dryRun ? '--dry-run' : '';\nif (!inputDir) {\n  throw new Error('inputDir is required');\n}\nif (!body.prompt) {\n  throw new Error('prompt is required');\n}\nconst command = [\n  q(pythonPath),\n  q(scriptPath),\n  '--input-dir', q(inputDir),\n  '--output-dir', q(outputDir),\n  '--mask-config', q(maskConfigPath),\n  '--prompt', q(body.prompt),\n  '--model', q(model),\n  '--workers', q(workers),\n  '--api-size', q(apiSize),\n  '--input-fidelity', q(inputFidelity),\n  saveIntermediates,\n  dryRun,\n].filter(Boolean).join(' ');\nreturn [{ json: { command, inputDir, outputDir, model, workers, apiSize, inputFidelity } }];"
+      },
+      "id": "2",
+      "name": "Build Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [540, 300]
+    },
+    {
+      "parameters": {
+        "command": "={{$json.command}}"
+      },
+      "id": "3",
+      "name": "Execute Batch",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [820, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, stdout: $json.stdout, stderr: $json.stderr, exitCode: $json.exitCode } }}"
+      },
+      "id": "4",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1090, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Command": {
+      "main": [
+        [
+          {
+            "node": "Execute Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Batch": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1"
+}

@@ -1,0 +1,29 @@
+﻿# Global Git ignore for local workspace artifacts
+
+*.log
+*.tmp
+*.bak
+Thumbs.db
+.DS_Store
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+**/.mypy_cache/
+
+# Local environments and generated data inside the project folder
+/tablet-case-background-workflow/.venv/
+/tablet-case-background-workflow/.tmp/
+/tablet-case-background-workflow/data/
+/tablet-case-background-workflow/vendor/
+/tablet-case-background-workflow/output/
+/tablet-case-background-workflow/mask-preview/
+/tablet-case-background-workflow/api-batch-workflow/output/
+
+# Local images and test assets
+/tablet-case-background-workflow/input/
+/tablet-case-background-workflow/floodfill-test-01-preview.jpg
+/tablet-case-background-workflow/floodfill-test-01.png
