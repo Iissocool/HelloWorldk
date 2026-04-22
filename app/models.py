@@ -21,7 +21,7 @@ BackendId = Literal[
     "migraphx",
     "cpu",
 ]
-JobType = Literal["single", "batch", "smart", "rename", "image", "ai_test", "agent", "cli"]
+JobType = Literal["single", "batch", "smart", "rename", "image", "ai_test", "ps_batch", "agent", "cli"]
 RenameMode = Literal["template", "replace", "fresh"]
 
 
@@ -142,6 +142,15 @@ class AIImageRunRequest(BaseModel):
     quality: str = "auto"
     file_prefix: str = "image_"
     timeout_sec: int = 180
+
+
+class PhotoshopBatchRequest(BaseModel):
+    template_path: str
+    droplet_path: str
+    input_dir: str
+    photoshop_path: str = ""
+    template_wait_sec: int = 8
+    timeout_sec: int = 1800
 
 
 class AppSettings(BaseModel):

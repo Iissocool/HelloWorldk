@@ -16,9 +16,17 @@ from .models import (
     AIImageTestRequest,
     BatchRunRequest,
     ExecutionResult,
+    PhotoshopBatchRequest,
     RenameRunRequest,
     SingleRunRequest,
     SmartRunRequest,
+)
+from .photoshop_bridge import (
+    detect_photoshop_executable,
+    image_count_in_directory,
+    open_template_in_photoshop,
+    run_droplet_on_folder,
+    wait_for_template_ready,
 )
 from .planner import build_runtime_plan
 from .renamer import build_rename_plan, execute_rename_plan
@@ -630,6 +638,98 @@ class LocalExecutor:
                 model=request.model,
                 input_ref=request.prompt,
                 output_ref=request.output_dir,
+                result=result,
+            )
+        return result
+
+    def run_photoshop_batch(self, request: PhotoshopBatchRequest, *, log_history: bool = True) -> ExecutionResult:
+        template_path = Path(request.template_path)
+        droplet_path = Path(request.droplet_path)
+        input_dir = Path(request.input_dir)
+        if not template_path.exists():
+            raise ExecutionError(f"模板文件不存在：{template_path}")
+        if not droplet_path.exists():
+            raise ExecutionError(f"Droplet 程序不存在：{droplet_path}")
+        if not input_dir.exists() or not input_dir.is_dir():
+            raise ExecutionError(f"素材目录不存在：{input_dir}")
+
+        image_count = image_count_in_directory(input_dir)
+        if image_count == 0:
+            raise ExecutionError("当前素材目录里没有可处理的图片。")
+
+        photoshop_path = Path(request.photoshop_path) if request.photoshop_path.strip() else detect_photoshop_executable()
+        open_command, open_source = open_template_in_photoshop(template_path, photoshop_path)
+        wait_for_template_ready(request.template_wait_sec)
+
+        try:
+            completed = run_droplet_on_folder(
+                droplet_path,
+                input_dir,
+                timeout_sec=request.timeout_sec,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            result = ExecutionResult(
+                ok=True,
+                command=[str(droplet_path), str(input_dir)],
+                stdout="\n".join(
+                    [
+                        f"模板已发送到 Photoshop：{template_path}",
+                        f"Photoshop 来源：{open_source}",
+                        f"打开命令：{' '.join(open_command)}",
+                        f"素材目录已发送给 Droplet：{input_dir}",
+                        f"图片数量：{image_count}",
+                        "Droplet 已启动，当前仍在 Photoshop 中继续执行。",
+                        stdout,
+                    ]
+                ).strip(),
+                stderr=stderr,
+                return_code=0,
+                backend_used="photoshop-droplet",
+                model_used="photoshop-template",
+                summary=f"Photoshop 套图已启动，{image_count} 张图片正在处理。",
+            )
+            if log_history:
+                self._log_job(
+                    job_type="ps_batch",
+                    backend="photoshop-droplet",
+                    model="photoshop-template",
+                    input_ref=str(input_dir),
+                    output_ref=str(input_dir),
+                    result=result,
+                )
+            return result
+
+        stdout_lines = [
+            f"模板已发送到 Photoshop：{template_path}",
+            f"Photoshop 来源：{open_source}",
+            f"打开命令：{' '.join(open_command)}",
+            f"素材目录已发送给 Droplet：{input_dir}",
+            f"图片数量：{image_count}",
+            "最终输出目录由该 Droplet 绑定的 Photoshop 动作决定。",
+        ]
+        result = ExecutionResult(
+            ok=completed.returncode == 0 if completed is not None else True,
+            command=[str(droplet_path), str(input_dir)],
+            stdout="\n".join(stdout_lines + [completed.stdout if completed and completed.stdout else ""]).strip(),
+            stderr=completed.stderr if completed else "",
+            return_code=completed.returncode if completed else 0,
+            backend_used="photoshop-droplet",
+            model_used="photoshop-template",
+            summary=(
+                f"Photoshop 套图执行完成，已发送 {image_count} 张图片。"
+                if completed is not None and completed.returncode == 0
+                else f"Photoshop 套图已启动，已发送 {image_count} 张图片。"
+            ),
+        )
+        if log_history:
+            self._log_job(
+                job_type="ps_batch",
+                backend="photoshop-droplet",
+                model="photoshop-template",
+                input_ref=str(input_dir),
+                output_ref=str(input_dir),
                 result=result,
             )
         return result

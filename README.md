@@ -10,6 +10,7 @@ NeonPilot 把抠图、批处理、批量命名、AI 生图、资源管理和 Doc
 - 智能批处理
 - 批量命名
 - OpenAI 兼容 AI 生图
+- Photoshop 自动套图桥接
 - 资源中心
   - 自动补齐最小运行依赖
   - 运行时按需安装 / 卸载
@@ -76,6 +77,25 @@ Hermes 数据目录固定在：
 ```text
 W:\gemini\data\neonpilot\hermes
 ```
+
+## Photoshop 自动套图桥接
+适合你现在这条现成流程：
+
+1. 打开 Photoshop
+2. 加载模板 PSD
+3. 把整个素材文件夹交给 Adobe Photoshop Droplet
+4. 由 Droplet 绑定的 Photoshop 动作自动完成套图和保存
+
+在程序里的 `PS 套图` 页填写：
+- `模板 PSD`
+- `Droplet 程序`
+- `素材目录`
+- `Photoshop 程序`
+
+说明：
+- 程序会先打开模板，再把整个文件夹发送给 Droplet
+- 当前最终输出目录仍由这个 Droplet 对应的 Photoshop 动作决定
+- 如果后续要让 NeonPilot 直接控制导出目录，下一步应改成 Photoshop JSX / Action 桥接
 
 ## CLI 命令桥
 ```powershell

@@ -40,7 +40,9 @@ from .hermes_adapter import (
 )
 from .history import HistoryStore
 from .models import AIImageRunRequest, AIImageTestRequest, AIProviderSettings, BatchRunRequest, RenameRunRequest, SingleRunRequest, SmartRunRequest
+from .models import PhotoshopBatchRequest
 from .planner import build_runtime_plan
+from .photoshop_bridge import detect_photoshop_executable
 from .runtime_manager import (
     build_model_manage_command,
     build_runtime_manage_command,
@@ -173,6 +175,16 @@ class DesktopApp:
         self.ai_quality_var = tk.StringVar(value="auto")
         self.ai_output_dir_var = tk.StringVar(value="")
         self.ai_prefix_var = tk.StringVar(value="ai_")
+
+        default_template = Path(r"C:\Users\F1736\Desktop\模板\昔音浴帘.psd")
+        default_droplet = Path(r"C:\Users\F1736\Desktop\自动套图 图标.exe")
+        detected_photoshop = detect_photoshop_executable()
+        self.ps_template_var = tk.StringVar(value=str(default_template) if default_template.exists() else "")
+        self.ps_droplet_var = tk.StringVar(value=str(default_droplet) if default_droplet.exists() else "")
+        self.ps_input_dir_var = tk.StringVar()
+        self.ps_photoshop_path_var = tk.StringVar(value=str(detected_photoshop) if detected_photoshop else "")
+        self.ps_wait_var = tk.StringVar(value="8")
+        self.ps_timeout_var = tk.StringVar(value="1800")
 
         self.agent_summary_var = tk.StringVar(value="尚未检测 Docker Hermes 环境")
         self.agent_docker_state_var = tk.StringVar(value="未检测")
@@ -482,6 +494,7 @@ class DesktopApp:
         self.rename_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
         self.ai_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
         self.resource_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
+        self.ps_batch_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
         self.agent_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
         self.history_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
 
@@ -493,6 +506,7 @@ class DesktopApp:
             self.rename_tab,
             self.ai_tab,
             self.resource_tab,
+            self.ps_batch_tab,
             self.agent_tab,
             self.history_tab,
         ]:
@@ -505,6 +519,7 @@ class DesktopApp:
         self.notebook.add(self.rename_tab, text="批量命名")
         self.notebook.add(self.ai_tab, text="AI 生图")
         self.notebook.add(self.resource_tab, text="资源中心")
+        self.notebook.add(self.ps_batch_tab, text="PS 套图")
         self.notebook.add(self.agent_tab, text="Agent")
         self.notebook.add(self.history_tab, text="任务历史")
 
@@ -515,6 +530,7 @@ class DesktopApp:
         self._build_rename_tab()
         self._build_ai_tab()
         self._build_resource_tab()
+        self._build_ps_batch_tab()
         self._build_agent_tab()
         self._build_history_tab()
 
@@ -736,6 +752,27 @@ class DesktopApp:
         ttk.Label(container, text="安装日志", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
         self.resource_log_text = self._make_text(container, height=12)
         self.resource_log_text.pack(fill="both", expand=False, pady=(8, 0))
+
+    def _build_ps_batch_tab(self) -> None:
+        form, result = self._build_form_and_result(
+            self.ps_batch_tab,
+            "Photoshop 套图桥接：先打开模板 PSD，再把整个素材目录交给 Adobe Photoshop Droplet 执行自动套图。",
+        )
+        self._hint_label(form, "说明：当前流程按你的现有工作方式执行。输出目录由 Droplet 对应的 Photoshop 动作决定。")
+        self._labeled_entry(form, "模板 PSD", self.ps_template_var, lambda: self._pick_specific_file(self.ps_template_var, [("Photoshop 模板", "*.psd;*.psb"), ("All Files", "*.*")]))
+        self._labeled_entry(form, "Droplet 程序", self.ps_droplet_var, lambda: self._pick_specific_file(self.ps_droplet_var, [("Executable", "*.exe"), ("All Files", "*.*")]))
+        self._labeled_entry(form, "素材目录", self.ps_input_dir_var, lambda: self._pick_directory(self.ps_input_dir_var))
+        self._labeled_entry(form, "Photoshop 程序", self.ps_photoshop_path_var, lambda: self._pick_specific_file(self.ps_photoshop_path_var, [("Executable", "*.exe"), ("All Files", "*.*")]), stretch=False, width=56)
+        self._labeled_entry(form, "模板预热秒数", self.ps_wait_var, stretch=False, width=12)
+        self._hint_label(form, "模板预热秒数：给 Photoshop 一点时间把 PSD 打开到位，再启动 Droplet。")
+        self._labeled_entry(form, "最长等待秒数", self.ps_timeout_var, stretch=False, width=12)
+        self._hint_label(form, "最长等待秒数：Droplet 超过这个时间还没退出，就按“已启动并继续执行”处理。")
+        action_row = ttk.Frame(form, style="Card.TFrame")
+        action_row.pack(fill="x", pady=(8, 0))
+        ttk.Button(action_row, text="自动检测 Photoshop", command=self._detect_photoshop_path).pack(side="left")
+        ttk.Button(action_row, text="打开模板目录", command=self._open_ps_template_dir).pack(side="left", padx=(8, 0))
+        ttk.Button(action_row, text="开始 Photoshop 套图", command=self._run_photoshop_batch, style="Accent.TButton").pack(side="left", padx=(8, 0))
+        self.ps_batch_result_text = result
 
     def _build_agent_tab(self) -> None:
         frame = ttk.Panedwindow(self.agent_tab, orient="horizontal")
@@ -1025,10 +1062,55 @@ class DesktopApp:
         if path:
             variable.set(path)
 
+    def _pick_specific_file(self, variable: tk.StringVar, filetypes) -> None:
+        path = filedialog.askopenfilename(filetypes=filetypes)
+        if path:
+            variable.set(path)
+
     def _pick_directory(self, variable: tk.StringVar) -> None:
         path = filedialog.askdirectory()
         if path:
             variable.set(path)
+
+    def _detect_photoshop_path(self) -> None:
+        detected = detect_photoshop_executable()
+        if detected:
+            self.ps_photoshop_path_var.set(str(detected))
+            self.status_var.set("已自动检测到 Photoshop 程序")
+        else:
+            messagebox.showwarning("未找到 Photoshop", "当前没有自动检测到 Photoshop.exe，请手动选择。")
+
+    def _open_ps_template_dir(self) -> None:
+        template_path = Path(self.ps_template_var.get().strip())
+        target = template_path.parent if template_path.exists() else Path(r"C:\Users\F1736\Desktop\模板")
+        if target.exists():
+            os.startfile(str(target))
+
+    def _run_photoshop_batch(self) -> None:
+        if not self.ps_template_var.get().strip():
+            messagebox.showwarning("缺少模板", "请先选择模板 PSD 文件。")
+            return
+        if not self.ps_droplet_var.get().strip():
+            messagebox.showwarning("缺少程序", "请先选择 Droplet 程序。")
+            return
+        if not self.ps_input_dir_var.get().strip():
+            messagebox.showwarning("缺少目录", "请先选择素材目录。")
+            return
+        try:
+            wait_sec = int(self.ps_wait_var.get().strip() or "8")
+            timeout_sec = int(self.ps_timeout_var.get().strip() or "1800")
+        except ValueError:
+            messagebox.showwarning("参数错误", "模板预热秒数和最长等待秒数必须是整数。")
+            return
+        request = PhotoshopBatchRequest(
+            template_path=self.ps_template_var.get().strip(),
+            droplet_path=self.ps_droplet_var.get().strip(),
+            input_dir=self.ps_input_dir_var.get().strip(),
+            photoshop_path=self.ps_photoshop_path_var.get().strip(),
+            template_wait_sec=wait_sec,
+            timeout_sec=timeout_sec,
+        )
+        self._start_job("ps_batch", request, self.ps_batch_result_text)
 
     def _refresh_background_animation(self) -> None:
         path = BACKGROUND_PNG if BACKGROUND_PNG.exists() else (BACKGROUND_GIF if BACKGROUND_GIF.exists() else None)
@@ -1469,6 +1551,8 @@ class DesktopApp:
                     result = self.executor.run_ai_test(request)
                 elif job_type == "image":
                     result = self.executor.run_ai_image(request)
+                elif job_type == "ps_batch":
+                    result = self.executor.run_photoshop_batch(request)
                 else:
                     result = self.executor.run_smart(request)
                 self.queue.put(("result", (job_type, output_widget, result)))
