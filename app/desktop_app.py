@@ -69,7 +69,24 @@ HERMES_PROVIDER_CHOICES = [
     "nvidia",
 ]
 BACKGROUND_SIZE = (1600, 900)
-BACKGROUND_FRAME_MS = 100
+BACKGROUND_FRAME_MS = 72
+
+ROOT_BG = "#040917"
+PAGE_BG = "#071120"
+CARD_BG = "#0a1730"
+CARD_BG_ALT = "#0d1d3f"
+BORDER_BLUE = "#7fd8ff"
+GLOW_BLUE = "#4bbdff"
+GLOW_BLUE_SOFT = "#a9e8ff"
+TEXT_MAIN = "#f3fbff"
+TEXT_MUTED = "#a9bedf"
+TEXT_TITLE = "#d8f4ff"
+SCROLL_TROUGH = "#081222"
+SCROLL_FACE = "#16355f"
+ENTRY_BG = "#0c1a36"
+ENTRY_READONLY_BG = "#13284f"
+ENTRY_BORDER = "#8ddfff"
+ENTRY_TEXT = "#f7fcff"
 
 
 class DesktopApp:
@@ -79,7 +96,7 @@ class DesktopApp:
         self.root.title(APP_NAME)
         self.root.geometry("1440x920")
         self.root.minsize(980, 640)
-        self.root.configure(bg="#04050a")
+        self.root.configure(bg=ROOT_BG)
 
         self.history_store = HistoryStore()
         self.executor = LocalExecutor(self.history_store)
@@ -90,8 +107,10 @@ class DesktopApp:
         self.ai_preview_photo = None
         self._icon_image = None
         self._background_frames: list[ImageTk.PhotoImage] = []
+        self._background_durations: list[int] = []
         self._background_index = 0
         self._background_job: str | None = None
+        self._background_targets: list[tk.Label] = []
 
         self.hardware = detect_hardware_profile()
         self.plan = build_runtime_plan()
@@ -168,7 +187,7 @@ class DesktopApp:
         self._apply_window_icon()
         self._build_ui()
         self.agent_model_provider_var.trace_add("write", self._on_agent_provider_change)
-        self._refresh_background_animation()
+        self.root.after(220, self._refresh_background_animation)
         self._refresh_dashboard()
         self._refresh_history()
         self._load_agent_model_settings()
@@ -184,26 +203,131 @@ class DesktopApp:
         except tk.TclError:
             pass
 
-        style.configure("TFrame", background="#06070d")
-        style.configure("Shell.TFrame", background="#04050a")
-        style.configure("Card.TFrame", background="#0d1018", relief="flat")
-        style.configure("Header.TFrame", background="#04050a")
-        style.configure("TLabel", background="#06070d", foreground="#eaf6ff", font=("Segoe UI", 10))
-        style.configure("Header.TLabel", background="#04050a", foreground="#f9f871", font=("Segoe UI Semibold", 24))
-        style.configure("Subtle.TLabel", background="#06070d", foreground="#9bb4d8")
-        style.configure("CardTitle.TLabel", background="#0d1018", foreground="#00f6ff", font=("Segoe UI Semibold", 12))
-        style.configure("TButton", background="#171b29", foreground="#f3fbff", borderwidth=0, padding=8)
-        style.map("TButton", background=[("active", "#20263b")])
-        style.configure("Accent.TButton", background="#f9f871", foreground="#05070d")
-        style.map("Accent.TButton", background=[("active", "#fff58f")], foreground=[("active", "#05070d")])
-        style.configure("TCheckbutton", background="#06070d", foreground="#dff9ff")
-        style.configure("TNotebook", background="#04050a", borderwidth=0)
-        style.configure("TNotebook.Tab", background="#101420", foreground="#9bb4d8", padding=(16, 8))
-        style.map("TNotebook.Tab", background=[("selected", "#1b2030")], foreground=[("selected", "#f9f871")])
-        style.configure("Treeview", background="#090d16", fieldbackground="#090d16", foreground="#eaf6ff", rowheight=30)
-        style.configure("Treeview.Heading", background="#13192a", foreground="#00f6ff", relief="flat")
-        style.map("Treeview", background=[("selected", "#2b0a25")], foreground=[("selected", "#f9f871")])
-        style.configure("Horizontal.TProgressbar", troughcolor="#101420", background="#f9f871", bordercolor="#101420", lightcolor="#f9f871", darkcolor="#f9f871")
+        style.configure("TFrame", background=PAGE_BG)
+        style.configure("Shell.TFrame", background=ROOT_BG)
+        style.configure("Card.TFrame", background=CARD_BG, relief="flat")
+        style.configure("Header.TFrame", background=ROOT_BG)
+        style.configure("TLabel", background=PAGE_BG, foreground=TEXT_MAIN, font=("Segoe UI", 10))
+        style.configure("Header.TLabel", background=ROOT_BG, foreground=TEXT_TITLE, font=("Segoe UI Semibold", 24))
+        style.configure("Subtle.TLabel", background=PAGE_BG, foreground=TEXT_MUTED)
+        style.configure("CardTitle.TLabel", background=CARD_BG, foreground=GLOW_BLUE_SOFT, font=("Segoe UI Semibold", 12))
+
+        style.configure(
+            "TButton",
+            background="#12284a",
+            foreground=TEXT_MAIN,
+            borderwidth=1,
+            relief="flat",
+            padding=8,
+            focusthickness=0,
+            focuscolor=PAGE_BG,
+        )
+        style.map(
+            "TButton",
+            background=[("active", "#1d3f70"), ("pressed", "#0e2646")],
+            foreground=[("active", "#f8fdff")],
+        )
+        style.configure(
+            "Accent.TButton",
+            background="#7fdbff",
+            foreground="#061121",
+            borderwidth=1,
+            relief="flat",
+            padding=8,
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", "#c6f2ff"), ("pressed", "#63c6f5")],
+            foreground=[("active", "#04101f"), ("pressed", "#04101f")],
+        )
+        style.configure("TCheckbutton", background=PAGE_BG, foreground=TEXT_MAIN)
+        style.map("TCheckbutton", foreground=[("active", GLOW_BLUE_SOFT)])
+
+        style.configure("TNotebook", background=ROOT_BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure(
+            "TNotebook.Tab",
+            background="#0f2140",
+            foreground="#bad3f7",
+            padding=(18, 9),
+            borderwidth=1,
+            lightcolor=BORDER_BLUE,
+            darkcolor="#18345b",
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", "#173c72"), ("active", "#15335f")],
+            foreground=[("selected", "#f5fcff"), ("active", "#eaf8ff")],
+        )
+
+        style.configure(
+            "TEntry",
+            fieldbackground=ENTRY_BG,
+            foreground=ENTRY_TEXT,
+            insertcolor=GLOW_BLUE_SOFT,
+            bordercolor=ENTRY_BORDER,
+            lightcolor=ENTRY_BORDER,
+            darkcolor=ENTRY_BORDER,
+            padding=7,
+        )
+        style.map(
+            "TEntry",
+            fieldbackground=[("readonly", ENTRY_READONLY_BG), ("disabled", "#0a1122")],
+            foreground=[("readonly", TEXT_MAIN), ("disabled", TEXT_MUTED)],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=ENTRY_BG,
+            background="#12335c",
+            foreground=ENTRY_TEXT,
+            arrowcolor=GLOW_BLUE_SOFT,
+            bordercolor=ENTRY_BORDER,
+            lightcolor=ENTRY_BORDER,
+            darkcolor=ENTRY_BORDER,
+            padding=6,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", ENTRY_BG)],
+            foreground=[("readonly", ENTRY_TEXT)],
+            background=[("readonly", "#12335c"), ("active", "#173f72")],
+            arrowcolor=[("active", "#ffffff"), ("readonly", GLOW_BLUE_SOFT)],
+        )
+
+        style.configure(
+            "Vertical.TScrollbar",
+            background=SCROLL_FACE,
+            troughcolor=SCROLL_TROUGH,
+            bordercolor=SCROLL_TROUGH,
+            arrowcolor=GLOW_BLUE_SOFT,
+            darkcolor="#102744",
+            lightcolor="#4daef0",
+            gripcount=0,
+            arrowsize=14,
+        )
+        style.configure(
+            "Horizontal.TScrollbar",
+            background=SCROLL_FACE,
+            troughcolor=SCROLL_TROUGH,
+            bordercolor=SCROLL_TROUGH,
+            arrowcolor=GLOW_BLUE_SOFT,
+            darkcolor="#102744",
+            lightcolor="#4daef0",
+            gripcount=0,
+            arrowsize=14,
+        )
+
+        style.configure("Treeview", background="#081021", fieldbackground="#081021", foreground=TEXT_MAIN, rowheight=30, borderwidth=0)
+        style.configure("Treeview.Heading", background="#10274a", foreground=GLOW_BLUE_SOFT, relief="flat")
+        style.map("Treeview", background=[("selected", "#1c4d86")], foreground=[("selected", "#f7fdff")])
+        style.configure(
+            "Horizontal.TProgressbar",
+            troughcolor="#0a1324",
+            background="#8fe4ff",
+            bordercolor="#0a1324",
+            lightcolor="#c7f7ff",
+            darkcolor="#59bff0",
+        )
+        style.configure("TPanedwindow", background=ROOT_BG, borderwidth=0, sashwidth=8)
 
     def _apply_window_icon(self) -> None:
         if ICON_PNG.exists():
@@ -218,15 +342,17 @@ class DesktopApp:
             except tk.TclError:
                 pass
 
+    def _attach_tab_background(self, tab: tk.Frame) -> None:
+        label = tk.Label(tab, bd=0, highlightthickness=0, bg=PAGE_BG)
+        label.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._background_targets.append(label)
+
     def _build_ui(self) -> None:
-        self.background_label = tk.Label(self.root, bd=0, highlightthickness=0, bg="#04050a")
+        self.background_label = tk.Label(self.root, bd=0, highlightthickness=0, bg=ROOT_BG)
         self.background_label.place(relx=0, rely=0, relwidth=1, relheight=1)
 
-        self.outer = ttk.Frame(self.root, style="Shell.TFrame", padding=14)
-        self.outer.pack(fill="both", expand=True)
-
-        header = ttk.Frame(self.outer, style="Header.TFrame")
-        header.pack(fill="x", pady=(0, 12))
+        header = ttk.Frame(self.root, style="Header.TFrame", padding=(18, 16, 18, 0))
+        header.pack(fill="x")
 
         brand_block = ttk.Frame(header, style="Header.TFrame")
         brand_block.pack(side="left", fill="x", expand=True)
@@ -237,24 +363,37 @@ class DesktopApp:
         action_block.pack(side="right")
         ttk.Button(action_block, text="刷新硬件", command=self._refresh_hardware, style="Accent.TButton").pack(side="left")
 
-        hero_card = ttk.Frame(self.outer, style="Card.TFrame", padding=14)
-        hero_card.pack(fill="x", pady=(0, 12))
+        hero_card = ttk.Frame(self.root, style="Card.TFrame", padding=14)
+        hero_card.pack(fill="x", padx=18, pady=(12, 12))
         ttk.Label(hero_card, text="当前工作方式", style="CardTitle.TLabel").pack(anchor="w")
         ttk.Label(hero_card, text="桌面程序现在默认走固定赛博朋克背景、聊天式 Agent、最小依赖先启动，以及按需安装运行时与模型。", style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(8, 0))
         ttk.Label(hero_card, textvariable=self.background_path_var, style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(8, 0))
 
-        self.notebook = ttk.Notebook(self.outer)
-        self.notebook.pack(fill="both", expand=True)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=18, pady=(0, 8))
 
-        self.dashboard_tab = ttk.Frame(self.notebook, padding=12)
-        self.single_tab = ttk.Frame(self.notebook, padding=12)
-        self.batch_tab = ttk.Frame(self.notebook, padding=12)
-        self.smart_tab = ttk.Frame(self.notebook, padding=12)
-        self.rename_tab = ttk.Frame(self.notebook, padding=12)
-        self.ai_tab = ttk.Frame(self.notebook, padding=12)
-        self.resource_tab = ttk.Frame(self.notebook, padding=12)
-        self.agent_tab = ttk.Frame(self.notebook, padding=12)
-        self.history_tab = ttk.Frame(self.notebook, padding=12)
+        self.dashboard_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
+        self.single_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
+        self.batch_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
+        self.smart_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
+        self.rename_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
+        self.ai_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
+        self.resource_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
+        self.agent_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
+        self.history_tab = tk.Frame(self.notebook, bg=PAGE_BG, bd=0, highlightthickness=0)
+
+        for tab in [
+            self.dashboard_tab,
+            self.single_tab,
+            self.batch_tab,
+            self.smart_tab,
+            self.rename_tab,
+            self.ai_tab,
+            self.resource_tab,
+            self.agent_tab,
+            self.history_tab,
+        ]:
+            self._attach_tab_background(tab)
 
         self.notebook.add(self.dashboard_tab, text="仪表盘")
         self.notebook.add(self.single_tab, text="单图处理")
@@ -276,7 +415,7 @@ class DesktopApp:
         self._build_agent_tab()
         self._build_history_tab()
 
-        ttk.Label(self.outer, textvariable=self.status_var, style="Subtle.TLabel", anchor="w").pack(fill="x", pady=(10, 0))
+        ttk.Label(self.root, textvariable=self.status_var, style="Subtle.TLabel", anchor="w").pack(fill="x", padx=18, pady=(0, 10))
 
     def _build_dashboard_tab(self) -> None:
         banner = ttk.Frame(self.dashboard_tab, style="Card.TFrame", padding=12)
@@ -403,10 +542,31 @@ class DesktopApp:
         ttk.Button(button_row, text="打开目录", command=self._open_ai_output_dir).pack(side="left", padx=(8, 0))
 
         ttk.Label(right, text="图片预览", style="CardTitle.TLabel").pack(anchor="w")
-        self.ai_preview_label = tk.Label(right, text="暂无图片", bg="#090d16", fg="#f4fbff", height=16)
+        self.ai_preview_label = tk.Label(
+            right,
+            text="暂无图片",
+            bg="#081021",
+            fg=TEXT_MAIN,
+            height=16,
+            highlightthickness=1,
+            highlightbackground="#1d4473",
+            highlightcolor="#1d4473",
+        )
         self.ai_preview_label.pack(fill="both", expand=False, pady=(8, 8))
         ttk.Label(right, text="已生成文件", style="CardTitle.TLabel").pack(anchor="w")
-        self.ai_files_list = tk.Listbox(right, height=8, bg="#090d16", fg="#f4fbff", selectbackground="#381029", relief="flat")
+        self.ai_files_list = tk.Listbox(
+            right,
+            height=8,
+            bg="#081021",
+            fg=TEXT_MAIN,
+            selectbackground="#21518d",
+            selectforeground="#f8fdff",
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground="#1d4473",
+            highlightcolor="#1d4473",
+        )
         self.ai_files_list.pack(fill="x", pady=(8, 8))
         self.ai_files_list.bind("<<ListboxSelect>>", self._on_ai_file_select)
         ttk.Label(right, text="运行日志", style="CardTitle.TLabel").pack(anchor="w")
@@ -503,8 +663,41 @@ class DesktopApp:
         self.agent_result_text = self._make_text(right, height=20)
         self.agent_result_text.pack(fill="both", expand=True, pady=(8, 8))
         ttk.Label(right, text="当前会话名", style="Subtle.TLabel").pack(anchor="w")
-        ttk.Entry(right, textvariable=self.agent_session_name_var, width=28).pack(anchor="w", pady=(4, 8))
-        self.agent_chat_input = ScrolledText(right, wrap="word", height=6, bg="#090d16", fg="#f4fbff", insertbackground="#00f6ff", relief="flat")
+        session_entry = tk.Entry(
+            right,
+            textvariable=self.agent_session_name_var,
+            width=28,
+            bg=ENTRY_BG,
+            fg=ENTRY_TEXT,
+            insertbackground=GLOW_BLUE_SOFT,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=ENTRY_BORDER,
+            highlightcolor=GLOW_BLUE_SOFT,
+        )
+        session_entry.pack(anchor="w", pady=(4, 8))
+        self.agent_chat_input = ScrolledText(
+            right,
+            wrap="word",
+            height=6,
+            bg="#081021",
+            fg=TEXT_MAIN,
+            insertbackground=GLOW_BLUE_SOFT,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground="#204a7a",
+            highlightcolor=BORDER_BLUE,
+        )
+        self.agent_chat_input.vbar.configure(
+            bg=SCROLL_FACE,
+            activebackground="#2f78c7",
+            troughcolor=SCROLL_TROUGH,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+        )
         self.agent_chat_input.pack(fill="x", pady=(0, 8))
         chat_row = ttk.Frame(right, style="Card.TFrame")
         chat_row.pack(fill="x")
@@ -540,9 +733,19 @@ class DesktopApp:
         return form, result
 
     def _build_scrollable_form(self, parent):
-        shell = ttk.Frame(parent, style="Card.TFrame", padding=0)
-        canvas = tk.Canvas(shell, bg="#0f172b", bd=0, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        shell = tk.Frame(parent, bg=CARD_BG, highlightthickness=1, highlightbackground="#173966", highlightcolor="#173966")
+        canvas = tk.Canvas(shell, bg=CARD_BG, bd=0, highlightthickness=0)
+        scrollbar = tk.Scrollbar(
+            shell,
+            orient="vertical",
+            command=canvas.yview,
+            bg=SCROLL_FACE,
+            activebackground="#2e6cb3",
+            troughcolor=SCROLL_TROUGH,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+        )
         inner = ttk.Frame(canvas, style="Card.TFrame", padding=10)
         window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
@@ -577,8 +780,28 @@ class DesktopApp:
         widget.bind_all("<Button-5>", _on_mousewheel, add="+")
 
     def _make_text(self, parent, *, height: int = 12) -> ScrolledText:
-        widget = ScrolledText(parent, wrap="word", height=height, bg="#090d16", fg="#f4fbff", insertbackground="#00f6ff", relief="flat")
-        widget.configure(selectbackground="#381029")
+        widget = ScrolledText(
+            parent,
+            wrap="word",
+            height=height,
+            bg="#081021",
+            fg=TEXT_MAIN,
+            insertbackground=GLOW_BLUE_SOFT,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground="#204a7a",
+            highlightcolor=BORDER_BLUE,
+        )
+        widget.configure(selectbackground="#22508d", selectforeground="#f8fdff")
+        widget.vbar.configure(
+            bg=SCROLL_FACE,
+            activebackground="#2f78c7",
+            troughcolor=SCROLL_TROUGH,
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+        )
         return widget
 
     def _hint_label(self, parent, text: str) -> None:
@@ -590,7 +813,21 @@ class DesktopApp:
         ttk.Label(wrapper, text=label, style="CardTitle.TLabel").pack(anchor="w")
         row = ttk.Frame(wrapper, style="Card.TFrame")
         row.pack(fill="x", pady=(4, 0))
-        entry = ttk.Entry(row, textvariable=variable, width=width)
+        entry = tk.Entry(
+            row,
+            textvariable=variable,
+            width=width,
+            bg=ENTRY_BG,
+            fg=ENTRY_TEXT,
+            insertbackground=GLOW_BLUE_SOFT,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=ENTRY_BORDER,
+            highlightcolor=GLOW_BLUE_SOFT,
+            disabledbackground="#091224",
+            disabledforeground=TEXT_MUTED,
+        )
         entry.pack(side="left", fill="x" if stretch else "none", expand=stretch)
         if browse_command is not None:
             ttk.Button(row, text="浏览", command=browse_command).pack(side="left", padx=(8, 0))
@@ -602,7 +839,20 @@ class DesktopApp:
         ttk.Label(wrapper, text=label, style="CardTitle.TLabel").pack(anchor="w")
         row = ttk.Frame(wrapper, style="Card.TFrame")
         row.pack(fill="x", pady=(4, 0))
-        entry = ttk.Entry(row, textvariable=variable, show="*", width=width)
+        entry = tk.Entry(
+            row,
+            textvariable=variable,
+            show="*",
+            width=width,
+            bg=ENTRY_BG,
+            fg=ENTRY_TEXT,
+            insertbackground=GLOW_BLUE_SOFT,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=ENTRY_BORDER,
+            highlightcolor=GLOW_BLUE_SOFT,
+        )
         entry.pack(side="left", fill="x" if stretch else "none", expand=stretch)
         return entry
 
@@ -612,7 +862,19 @@ class DesktopApp:
         ttk.Label(wrapper, text=label, style="CardTitle.TLabel").pack(anchor="w")
         row = ttk.Frame(wrapper, style="Card.TFrame")
         row.pack(fill="x", pady=(4, 0))
-        entry = ttk.Entry(row, textvariable=variable, state="readonly", width=width)
+        entry = tk.Entry(
+            row,
+            textvariable=variable,
+            state="readonly",
+            width=width,
+            readonlybackground=ENTRY_READONLY_BG,
+            fg=TEXT_MAIN,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground="#5bb7eb",
+            highlightcolor="#5bb7eb",
+        )
         entry.pack(side="left", fill="x" if stretch else "none", expand=stretch)
         return entry
 
@@ -643,25 +905,32 @@ class DesktopApp:
         path = BACKGROUND_GIF if BACKGROUND_GIF.exists() else None
         self._stop_background_animation()
         self._background_frames = []
+        self._background_durations = []
         if path is None or not path.exists():
-            self.background_label.configure(image="", bg="#04050a")
+            self.background_label.configure(image="", bg=ROOT_BG)
             return
         try:
             source = Image.open(path)
             frames = []
+            durations = []
+            width = max(self.root.winfo_width(), 1440)
+            height = max(self.root.winfo_height(), 920)
             for frame in ImageSequence.Iterator(source):
-                image = self._cover_resize(frame.convert("RGBA"), BACKGROUND_SIZE)
-                overlay = Image.new("RGBA", image.size, (4, 10, 24, 120))
+                image = self._cover_resize(frame.convert("RGBA"), (width, height))
+                overlay = Image.new("RGBA", image.size, (4, 16, 34, 58))
                 image = Image.alpha_composite(image, overlay)
                 frames.append(ImageTk.PhotoImage(image))
+                durations.append(max(int(frame.info.get("duration", BACKGROUND_FRAME_MS)), 48))
             if not frames:
-                frames.append(ImageTk.PhotoImage(self._cover_resize(source.convert("RGBA"), BACKGROUND_SIZE)))
+                frames.append(ImageTk.PhotoImage(self._cover_resize(source.convert("RGBA"), (width, height))))
+                durations.append(BACKGROUND_FRAME_MS)
             self._background_frames = frames
+            self._background_durations = durations
             self._background_index = 0
-            self.background_label.configure(image=self._background_frames[0], text="")
+            self._apply_background_frame(0)
             self._animate_background()
         except Exception:
-            self.background_label.configure(image="", bg="#04050a")
+            self.background_label.configure(image="", bg=ROOT_BG)
 
     def _stop_background_animation(self) -> None:
         if self._background_job is not None:
@@ -671,9 +940,16 @@ class DesktopApp:
     def _animate_background(self) -> None:
         if not self._background_frames:
             return
-        self.background_label.configure(image=self._background_frames[self._background_index])
+        self._apply_background_frame(self._background_index)
+        delay = self._background_durations[self._background_index] if self._background_durations else BACKGROUND_FRAME_MS
         self._background_index = (self._background_index + 1) % len(self._background_frames)
-        self._background_job = self.root.after(BACKGROUND_FRAME_MS, self._animate_background)
+        self._background_job = self.root.after(delay, self._animate_background)
+
+    def _apply_background_frame(self, index: int) -> None:
+        frame = self._background_frames[index]
+        self.background_label.configure(image=frame)
+        for target in self._background_targets:
+            target.configure(image=frame)
 
     def _cover_resize(self, image: Image.Image, size: tuple[int, int]) -> Image.Image:
         target_w, target_h = size
@@ -1398,12 +1674,16 @@ def show_splash(root: tk.Tk) -> tk.Toplevel | None:
     splash.attributes("-topmost", True)
     source = Image.open(splash_path)
     frames: list[ImageTk.PhotoImage] = []
+    durations: list[int] = []
     for frame in ImageSequence.Iterator(source):
         image = frame.convert("RGBA")
         frames.append(ImageTk.PhotoImage(image))
+        durations.append(max(int(frame.info.get("duration", 70)), 48))
     if not frames:
         frames.append(ImageTk.PhotoImage(source.convert("RGBA")))
+        durations.append(80)
     splash._frames = frames
+    splash._durations = durations
     splash._frame_index = 0
     _center_window(splash, frames[0].width(), frames[0].height())
     label = tk.Label(splash, image=frames[0], borderwidth=0, highlightthickness=0)
@@ -1417,7 +1697,8 @@ def show_splash(root: tk.Tk) -> tk.Toplevel | None:
         index = getattr(splash, "_frame_index", 0)
         label.configure(image=frames_local[index])
         splash._frame_index = (index + 1) % len(frames_local)
-        splash._job = splash.after(90, _animate)
+        durations_local = getattr(splash, "_durations", [])
+        splash._job = splash.after(durations_local[index] if durations_local else 70, _animate)
 
     _animate()
     splash.update_idletasks()
@@ -1439,11 +1720,15 @@ def close_splash(root: tk.Tk, splash: tk.Toplevel | None) -> None:
 def main() -> None:
     root = tk.Tk()
     splash = show_splash(root)
-    DesktopApp(root)
-    if splash is not None:
-        root.after(1600, lambda: close_splash(root, splash))
-    else:
-        close_splash(root, splash)
+
+    def _boot() -> None:
+        root._desktop_app = DesktopApp(root)
+        if splash is not None:
+            root.after(450, lambda: close_splash(root, splash))
+        else:
+            close_splash(root, splash)
+
+    root.after(90, _boot)
     root.mainloop()
 
 
