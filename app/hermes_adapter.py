@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+import sqlite3
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -24,6 +25,32 @@ DOCKER_DESKTOP_CANDIDATES = [
     Path(os.environ.get("ProgramFiles", "")) / "Docker" / "Docker" / "Docker Desktop.exe",
     Path(os.environ.get("LocalAppData", "")) / "Programs" / "Docker" / "Docker" / "Docker Desktop.exe",
 ]
+PROVIDER_ENV_KEYS = {
+    "openrouter": "OPENROUTER_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "xai": "XAI_API_KEY",
+    "huggingface": "HF_TOKEN",
+    "ollama-cloud": "OLLAMA_API_KEY",
+    "zai": "GLM_API_KEY",
+    "kimi-coding": "KIMI_API_KEY",
+    "kimi-coding-cn": "KIMI_CN_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+    "minimax-cn": "MINIMAX_CN_API_KEY",
+    "arcee": "ARCEEAI_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
+}
+PROVIDER_BASE_URL_ENV_KEYS = {
+    "gemini": "GEMINI_BASE_URL",
+    "ollama-cloud": "OLLAMA_BASE_URL",
+    "zai": "GLM_BASE_URL",
+    "kimi-coding": "KIMI_BASE_URL",
+    "kimi-coding-cn": "KIMI_BASE_URL",
+    "minimax": "MINIMAX_BASE_URL",
+    "minimax-cn": "MINIMAX_CN_BASE_URL",
+    "arcee": "ARCEE_BASE_URL",
+}
 
 
 @dataclass(slots=True)
@@ -49,6 +76,15 @@ class HermesModelSettings:
     default_model: str = ""
     provider: str = "auto"
     base_url: str = ""
+
+
+@dataclass(slots=True)
+class HermesProviderSettings:
+    provider: str = "openrouter"
+    api_key: str = ""
+    api_env_key: str = ""
+    base_url: str = ""
+    base_url_env_key: str = ""
 
 
 def _run_process(command: Iterable[str], *, timeout_sec: int = 20) -> subprocess.CompletedProcess[str]:
@@ -87,6 +123,113 @@ def hermes_config_path() -> Path:
     return hermes_data_root() / "config.yaml"
 
 
+def hermes_env_path() -> Path:
+    path = hermes_data_root() / ".env"
+    if not path.exists():
+        path.write_text("", encoding="utf-8")
+    return path
+
+
+def hermes_state_db_path() -> Path:
+    return hermes_data_root() / "state.db"
+
+
+def hermes_session_map_path() -> Path:
+    return hermes_data_root() / "neonpilot_sessions.json"
+
+
+def _read_env_pairs() -> dict[str, str]:
+    path = hermes_env_path()
+    pairs: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        pairs[key.strip()] = value.strip()
+    return pairs
+
+
+def _update_env_pairs(updates: dict[str, str]) -> Path:
+    path = hermes_env_path()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    used: set[str] = set()
+    new_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        replaced = False
+        for key, value in updates.items():
+            if stripped.startswith(f"{key}=") or stripped.startswith(f"#{key}=") or stripped.startswith(f"# {key}="):
+                new_lines.append(f"{key}={value}")
+                used.add(key)
+                replaced = True
+                break
+        if not replaced:
+            new_lines.append(line)
+    for key, value in updates.items():
+        if key not in used:
+            new_lines.append(f"{key}={value}")
+    path.write_text("\n".join(new_lines).strip() + "\n", encoding="utf-8")
+    return path
+
+
+def _load_session_map() -> dict[str, str]:
+    path = hermes_session_map_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {str(key): str(value) for key, value in payload.items() if key and value}
+
+
+def _save_session_map(payload: dict[str, str]) -> Path:
+    path = hermes_session_map_path()
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _session_exists(session_id: str) -> bool:
+    db_path = hermes_state_db_path()
+    if not db_path.exists() or not session_id.strip():
+        return False
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute("select 1 from sessions where id = ? limit 1", (session_id.strip(),)).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return False
+    return bool(row)
+
+
+def _latest_tool_session_id() -> str:
+    db_path = hermes_state_db_path()
+    if not db_path.exists():
+        return ""
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                """
+                select id
+                from sessions
+                where source = 'tool'
+                order by started_at desc
+                limit 1
+                """
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception:
+        return ""
+    return str(row[0]) if row and row[0] else ""
+
+
 def load_hermes_model_settings() -> HermesModelSettings:
     config_path = hermes_config_path()
     if not config_path.exists():
@@ -119,6 +262,28 @@ def save_hermes_model_settings(settings: HermesModelSettings) -> Path:
     return config_path
 
 
+def load_hermes_provider_settings(provider: str) -> HermesProviderSettings:
+    env_pairs = _read_env_pairs()
+    api_env_key = PROVIDER_ENV_KEYS.get(provider, "")
+    base_url_env_key = PROVIDER_BASE_URL_ENV_KEYS.get(provider, "")
+    return HermesProviderSettings(
+        provider=provider,
+        api_key=env_pairs.get(api_env_key, "") if api_env_key else "",
+        api_env_key=api_env_key,
+        base_url=env_pairs.get(base_url_env_key, "") if base_url_env_key else "",
+        base_url_env_key=base_url_env_key,
+    )
+
+
+def save_hermes_provider_settings(settings: HermesProviderSettings) -> Path:
+    updates: dict[str, str] = {}
+    if settings.api_env_key:
+        updates[settings.api_env_key] = settings.api_key.strip()
+    if settings.base_url_env_key:
+        updates[settings.base_url_env_key] = settings.base_url.strip()
+    return _update_env_pairs(updates)
+
+
 def detect_interactive_command(command: str) -> str | None:
     tokens = shlex.split(command)
     if tokens and tokens[0].lower() == "hermes":
@@ -138,6 +303,56 @@ def detect_interactive_command(command: str) -> str | None:
     if head in {"login", "logout"}:
         return f"hermes {head} 需要交互流程，当前命令框不支持。"
     return None
+
+
+def is_chat_query_supported() -> bool:
+    return True
+
+
+def run_hermes_query(
+    prompt: str,
+    *,
+    session_name: str = "neonpilot",
+    model: str = "",
+    provider: str = "",
+) -> tuple[bool, str, str]:
+    ready, message = start_docker_desktop()
+    if not ready:
+        raise RuntimeError(message)
+    if not docker_image_present():
+        ok, stdout, stderr = pull_hermes_image()
+        if not ok:
+            raise RuntimeError((stdout + "\n" + stderr).strip())
+
+    data_root = hermes_data_root()
+    command = [
+        "run",
+        "--rm",
+        "-v",
+        f"{docker_volume_path(data_root)}:/opt/data",
+        DOCKER_IMAGE,
+        "chat",
+        "-q",
+        prompt,
+        "-Q",
+        "--source",
+        "tool",
+    ]
+    session_map = _load_session_map()
+    session_id = session_map.get(session_name, "")
+    if session_id and _session_exists(session_id):
+        command.extend(["--resume", session_id])
+    if model.strip():
+        command.extend(["-m", model.strip()])
+    if provider.strip() and provider.strip() != "auto":
+        command.extend(["--provider", provider.strip()])
+    completed = _run_docker(*command, timeout_sec=1800)
+    if completed.returncode == 0:
+        latest_session_id = _latest_tool_session_id()
+        if latest_session_id:
+            session_map[session_name] = latest_session_id
+            _save_session_map(session_map)
+    return completed.returncode == 0, completed.stdout, completed.stderr
 
 
 def docker_volume_path(path: Path) -> str:

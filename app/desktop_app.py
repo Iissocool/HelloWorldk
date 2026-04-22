@@ -18,12 +18,17 @@ from .executor import ExecutionError, LocalExecutor
 from .hardware import detect_hardware_profile
 from .hermes_adapter import (
     HermesModelSettings,
+    HermesProviderSettings,
     load_hermes_model_settings,
+    load_hermes_provider_settings,
     export_hermes_skill,
     inspect_hermes_environment,
+    is_chat_query_supported,
     read_hermes_logs,
     run_hermes_command,
+    run_hermes_query,
     save_hermes_model_settings,
+    save_hermes_provider_settings,
     start_docker_desktop,
     start_hermes_service,
     stop_hermes_service,
@@ -38,7 +43,23 @@ MODEL_CHOICES = [model.id for model in MODEL_CATALOG]
 RENAME_MODE_CHOICES = ["template", "replace", "fresh"]
 AI_SIZE_CHOICES = ["1024x1024", "1536x1024", "1024x1536"]
 AI_QUALITY_CHOICES = ["auto", "high", "medium", "low"]
-HERMES_PROVIDER_CHOICES = ["auto", "openrouter", "openai", "anthropic", "google", "azure"]
+HERMES_PROVIDER_CHOICES = [
+    "auto",
+    "openrouter",
+    "openai",
+    "gemini",
+    "anthropic",
+    "xai",
+    "huggingface",
+    "ollama-cloud",
+    "zai",
+    "kimi-coding",
+    "kimi-coding-cn",
+    "minimax",
+    "minimax-cn",
+    "arcee",
+    "nvidia",
+]
 BACKGROUND_SIZE = (1600, 900)
 BACKGROUND_FRAME_MS = 120
 
@@ -118,22 +139,32 @@ class DesktopApp:
         self.ai_prefix_var = tk.StringVar(value="ai_")
 
         self.agent_summary_var = tk.StringVar(value="尚未检测 Docker Hermes 环境")
+        self.agent_docker_state_var = tk.StringVar(value="未检测")
+        self.agent_hermes_state_var = tk.StringVar(value="未检测")
+        self.agent_chat_state_var = tk.StringVar(value="未检测")
         self.agent_command_var = tk.StringVar(value=self.app_settings.hermes_command or "hermes --help")
         self.agent_skill_path_var = tk.StringVar(value="")
         self.agent_data_root_var = tk.StringVar(value=str(HERMES_DATA_ROOT))
         self.agent_model_default_var = tk.StringVar()
         self.agent_model_provider_var = tk.StringVar(value="auto")
         self.agent_model_base_url_var = tk.StringVar()
+        self.agent_api_key_var = tk.StringVar()
+        self.agent_api_env_var = tk.StringVar(value="-")
+        self.agent_provider_base_url_var = tk.StringVar()
+        self.agent_provider_base_env_var = tk.StringVar(value="-")
+        self.agent_session_name_var = tk.StringVar(value="neonpilot")
         current_bg = self.app_settings.background_gif_path or "默认赛博朋克背景"
         self.background_path_var = tk.StringVar(value=f"当前背景动图：{current_bg}")
 
         self._apply_theme()
         self._apply_window_icon()
         self._build_ui()
+        self.agent_model_provider_var.trace_add("write", self._on_agent_provider_change)
         self._refresh_background_animation()
         self._refresh_dashboard()
         self._refresh_history()
         self._load_agent_model_settings()
+        self._load_agent_provider_settings()
         self._refresh_agent_status(silent=True)
         self.root.after(150, self._poll_queue)
         self.root.after(500, self._maybe_show_guide)
@@ -241,8 +272,8 @@ class DesktopApp:
     def _build_dashboard_tab(self) -> None:
         banner = ttk.Frame(self.dashboard_tab, style="Card.TFrame", padding=12)
         banner.pack(fill="x", pady=(0, 12))
-        ttk.Label(banner, text="首要结论", style="CardTitle.TLabel").pack(anchor="w")
-        ttk.Label(banner, text="1. 当前不需要重写整体框架。2. Hermes 的正确接法是 Agent 控制台 + Skill 导出 + 内置 CLI。3. 表单已改成可滚动容器，窗口缩小时功能不会被挤没。", style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(8, 0))
+        ttk.Label(banner, text="快速开始", style="CardTitle.TLabel").pack(anchor="w")
+        ttk.Label(banner, text="先看硬件状态，再选处理功能。Agent 页适合查看运行状态、设置 API、直接与 Hermes 对话。", style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(8, 0))
 
         top = ttk.Panedwindow(self.dashboard_tab, orient="horizontal")
         top.pack(fill="both", expand=True)
@@ -381,47 +412,52 @@ class DesktopApp:
         frame.add(form_shell, weight=2)
         frame.add(right, weight=3)
 
-        self._hint_label(form, "Agent 控制台：Docker Hermes 会在后台运行，不会再弹出 Ubuntu 终端窗口。")
-        ttk.Label(form, text="Docker Hermes 状态", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 0))
+        self._hint_label(form, "Agent 现在只保留三件事：看状态、改配置、直接对话。")
+        ttk.Label(form, text="当前状态", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 0))
+        self._labeled_readonly(form, "Docker", self.agent_docker_state_var)
+        self._labeled_readonly(form, "Hermes", self.agent_hermes_state_var)
+        self._labeled_readonly(form, "对话能力", self.agent_chat_state_var)
         ttk.Label(form, textvariable=self.agent_summary_var, style="Subtle.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(6, 8))
-        self._labeled_entry(form, "Hermes 数据目录", self.agent_data_root_var)
-        self._hint_label(form, "这个目录会存放 Hermes 的配置、技能、会话和日志。")
-        status_buttons = ttk.Frame(form, style="Card.TFrame")
-        status_buttons.pack(fill="x", pady=(4, 8))
-        ttk.Button(status_buttons, text="刷新 Agent", command=self._refresh_agent_status).pack(side="left")
-        ttk.Button(status_buttons, text="启动 Docker", command=self._start_agent_docker).pack(side="left", padx=(8, 0))
-        ttk.Button(status_buttons, text="启动 Hermes", command=self._start_agent_service).pack(side="left", padx=(8, 0))
-        ttk.Button(status_buttons, text="停止 Hermes", command=self._stop_agent_service).pack(side="left", padx=(8, 0))
-        ttk.Button(status_buttons, text="查看日志", command=self._show_agent_logs).pack(side="left", padx=(8, 0))
-        ttk.Button(status_buttons, text="打开数据目录", command=self._open_agent_data_dir).pack(side="left", padx=(8, 0))
-        tool_buttons = ttk.Frame(form, style="Card.TFrame")
-        tool_buttons.pack(fill="x", pady=(0, 8))
-        ttk.Button(status_buttons, text="导出 Hermes Skill", command=self._export_hermes_skill).pack(side="left", padx=(8, 0))
-        ttk.Button(tool_buttons, text="打开 Skill 目录", command=self._open_skill_dir).pack(side="left")
-        ttk.Label(form, text="程序 CLI 桥", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
-        self._hint_label(form, "Hermes 可以通过 run_neonpilot_cli.ps1 直接调用程序内部功能。")
-        ttk.Label(form, textvariable=self.agent_skill_path_var, style="Subtle.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(0, 8))
-        ttk.Label(form, text="模型设置", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
-        self._hint_label(form, "这里用于替代 hermes model 这种交互式命令。")
-        self._labeled_entry(form, "默认模型", self.agent_model_default_var)
+        status_row = ttk.Frame(form, style="Card.TFrame")
+        status_row.pack(fill="x", pady=(4, 8))
+        ttk.Button(status_row, text="刷新状态", command=self._refresh_agent_status).pack(side="left")
+        ttk.Button(status_row, text="一键准备 Agent", command=self._ensure_agent_ready, style="Accent.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(status_row, text="打开数据目录", command=self._open_agent_data_dir).pack(side="left", padx=(8, 0))
+
+        ttk.Label(form, text="模型与 API", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
+        self._hint_label(form, "在这里设置默认模型、提供方、API Key 和 Base URL。")
         self._labeled_combo(form, "提供方", self.agent_model_provider_var, HERMES_PROVIDER_CHOICES)
-        self._labeled_entry(form, "Base URL", self.agent_model_base_url_var)
-        model_row = ttk.Frame(form, style="Card.TFrame")
-        model_row.pack(fill="x", pady=(4, 8))
-        ttk.Button(model_row, text="读取模型配置", command=self._load_agent_model_settings).pack(side="left")
-        ttk.Button(model_row, text="保存模型配置", command=self._save_agent_model_settings, style="Accent.TButton").pack(side="left", padx=(8, 0))
-        ttk.Label(form, text="Hermes 命令对话框", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
-        self._labeled_entry(form, "命令", self.agent_command_var)
-        self._hint_label(form, "示例：hermes --help、hermes doctor、hermes config show。交互式命令会提示改用对应面板。")
-        custom_row = ttk.Frame(form, style="Card.TFrame")
-        custom_row.pack(fill="x", pady=(4, 8))
-        ttk.Button(custom_row, text="运行 help", command=self._run_agent_help).pack(side="left")
-        ttk.Button(custom_row, text="运行 doctor", command=self._run_agent_doctor).pack(side="left", padx=(8, 0))
-        ttk.Button(custom_row, text="查看配置", command=self._run_agent_config_show).pack(side="left", padx=(8, 0))
-        ttk.Button(custom_row, text="执行自定义命令", command=self._run_agent_custom, style="Accent.TButton").pack(side="left", padx=(8, 0))
-        ttk.Label(right, text="Agent 控制台", style="CardTitle.TLabel").pack(anchor="w")
-        self.agent_result_text = self._make_text(right, height=28)
-        self.agent_result_text.pack(fill="both", expand=True, pady=(8, 0))
+        self._labeled_entry(form, "默认模型", self.agent_model_default_var)
+        self._labeled_entry(form, "模型 Base URL", self.agent_model_base_url_var)
+        self._labeled_secret_entry(form, "API Key", self.agent_api_key_var)
+        self._labeled_readonly(form, "API 环境变量", self.agent_api_env_var)
+        self._labeled_entry(form, "提供方 Base URL", self.agent_provider_base_url_var)
+        self._labeled_readonly(form, "Base URL 环境变量", self.agent_provider_base_env_var)
+        config_row = ttk.Frame(form, style="Card.TFrame")
+        config_row.pack(fill="x", pady=(4, 8))
+        ttk.Button(config_row, text="读取配置", command=self._load_agent_provider_settings).pack(side="left")
+        ttk.Button(config_row, text="保存配置", command=self._save_agent_settings, style="Accent.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(config_row, text="查看当前配置", command=self._run_agent_config_show).pack(side="left", padx=(8, 0))
+
+        ttk.Label(form, text="Hermes Skill", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
+        ttk.Label(form, textvariable=self.agent_skill_path_var, style="Subtle.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(0, 8))
+        skill_row = ttk.Frame(form, style="Card.TFrame")
+        skill_row.pack(fill="x", pady=(4, 8))
+        ttk.Button(skill_row, text="导出 Skill", command=self._export_hermes_skill).pack(side="left")
+        ttk.Button(skill_row, text="打开 Skill 目录", command=self._open_skill_dir).pack(side="left", padx=(8, 0))
+
+        ttk.Label(right, text="Hermes 对话终端", style="CardTitle.TLabel").pack(anchor="w")
+        self.agent_result_text = self._make_text(right, height=20)
+        self.agent_result_text.pack(fill="both", expand=True, pady=(8, 8))
+        ttk.Label(right, text="当前会话名", style="Subtle.TLabel").pack(anchor="w")
+        ttk.Entry(right, textvariable=self.agent_session_name_var).pack(fill="x", pady=(4, 8))
+        self.agent_chat_input = ScrolledText(right, wrap="word", height=6, bg="#08111f", fg="#d6f3ff", insertbackground="#7cecff", relief="flat")
+        self.agent_chat_input.pack(fill="x", pady=(0, 8))
+        chat_row = ttk.Frame(right, style="Card.TFrame")
+        chat_row.pack(fill="x")
+        ttk.Button(chat_row, text="发送消息", command=self._send_agent_message, style="Accent.TButton").pack(side="left")
+        ttk.Button(chat_row, text="清空对话", command=self._clear_agent_console).pack(side="left", padx=(8, 0))
+        ttk.Button(chat_row, text="查看日志", command=self._show_agent_logs).pack(side="left", padx=(8, 0))
 
     def _build_history_tab(self) -> None:
         controls = ttk.Frame(self.history_tab, style="Card.TFrame")
@@ -513,6 +549,14 @@ class DesktopApp:
         wrapper.pack(fill="x", pady=6)
         ttk.Label(wrapper, text=label, style="CardTitle.TLabel").pack(anchor="w")
         entry = ttk.Entry(wrapper, textvariable=variable, show="*")
+        entry.pack(fill="x", pady=(4, 0))
+        return entry
+
+    def _labeled_readonly(self, parent, label: str, variable: tk.StringVar):
+        wrapper = ttk.Frame(parent, style="Card.TFrame")
+        wrapper.pack(fill="x", pady=6)
+        ttk.Label(wrapper, text=label, style="CardTitle.TLabel").pack(anchor="w")
+        entry = ttk.Entry(wrapper, textvariable=variable, state="readonly")
         entry.pack(fill="x", pady=(4, 0))
         return entry
 
@@ -641,6 +685,16 @@ class DesktopApp:
     def _refresh_agent_status(self, silent: bool = False) -> None:
         status = inspect_hermes_environment()
         self.agent_data_root_var.set(status.data_root)
+        self.agent_docker_state_var.set("已运行" if status.docker_daemon_running else "未运行")
+        self.agent_hermes_state_var.set("已运行" if status.service_running else "未运行")
+        provider_ready = bool(self.agent_api_key_var.get().strip()) or "不需要" in self.agent_api_env_var.get()
+        if status.service_running and provider_ready and is_chat_query_supported():
+            chat_state = "可对话"
+        elif not status.service_running:
+            chat_state = "需先启动 Hermes"
+        else:
+            chat_state = "需先配置 API"
+        self.agent_chat_state_var.set(chat_state)
         summary = status.summary
         if status.hermes_version:
             summary += f"\n- 版本：{status.hermes_version}"
@@ -870,12 +924,25 @@ class DesktopApp:
         path.mkdir(parents=True, exist_ok=True)
         os.startfile(str(path))
 
+    def _on_agent_provider_change(self, *_args) -> None:
+        if hasattr(self, "agent_api_key_var"):
+            self._load_agent_provider_settings()
+
     def _load_agent_model_settings(self) -> None:
         settings = load_hermes_model_settings()
         self.agent_model_default_var.set(settings.default_model)
         self.agent_model_provider_var.set(settings.provider or "auto")
         self.agent_model_base_url_var.set(settings.base_url)
         self.status_var.set("已读取 Hermes 模型配置")
+
+    def _load_agent_provider_settings(self) -> None:
+        provider = self.agent_model_provider_var.get().strip() or "auto"
+        settings = load_hermes_provider_settings(provider)
+        self.agent_api_key_var.set(settings.api_key)
+        self.agent_api_env_var.set(settings.api_env_key or ("auto 模式请先选择具体提供方" if provider == "auto" else "当前提供方没有预设 API 环境变量"))
+        self.agent_provider_base_url_var.set(settings.base_url)
+        self.agent_provider_base_env_var.set(settings.base_url_env_key or ("当前提供方没有预设 Base URL 环境变量"))
+        self.status_var.set("已读取 Hermes 提供方配置")
 
     def _save_agent_model_settings(self) -> None:
         default_model = self.agent_model_default_var.get().strip()
@@ -902,6 +969,82 @@ class DesktopApp:
                 ]
             ),
         )
+
+    def _save_agent_settings(self) -> None:
+        self._save_agent_model_settings()
+        provider = self.agent_model_provider_var.get().strip() or "auto"
+        resolved = load_hermes_provider_settings(provider)
+        provider_settings = HermesProviderSettings(
+            provider=provider,
+            api_key=self.agent_api_key_var.get().strip(),
+            api_env_key=resolved.api_env_key,
+            base_url=self.agent_provider_base_url_var.get().strip(),
+            base_url_env_key=resolved.base_url_env_key,
+        )
+        env_path = save_hermes_provider_settings(provider_settings)
+        current = self.agent_result_text.get("1.0", tk.END).strip()
+        extra = [
+            "提供方配置已保存。",
+            f".env: {env_path}",
+            f"provider: {provider}",
+            f"api_env: {provider_settings.api_env_key or '-'}",
+            f"base_env: {provider_settings.base_url_env_key or '-'}",
+        ]
+        self.agent_result_text.delete("1.0", tk.END)
+        self.agent_result_text.insert("1.0", "\n".join(extra + (["", current] if current else [])))
+        self.status_var.set("Hermes 模型与 API 配置已保存")
+        self._refresh_agent_status(silent=True)
+
+    def _ensure_agent_ready(self) -> None:
+        self.agent_result_text.delete("1.0", tk.END)
+        self.agent_result_text.insert("1.0", "正在准备 Agent...\n")
+        self.status_var.set("正在准备 Agent")
+
+        def worker() -> None:
+            try:
+                ok_docker, docker_message = start_docker_desktop()
+                if not ok_docker:
+                    raise RuntimeError(docker_message)
+                ok, stdout, stderr = start_hermes_service()
+                self.queue.put(("agent_result", ("一键准备 Agent", ok, stdout or docker_message, stderr)))
+            except Exception as exc:
+                self.queue.put(("agent_error", ("一键准备 Agent", exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _clear_agent_console(self) -> None:
+        self.agent_result_text.delete("1.0", tk.END)
+        self.agent_chat_input.delete("1.0", tk.END)
+        self.status_var.set("已清空 Agent 对话")
+
+    def _send_agent_message(self) -> None:
+        prompt = self.agent_chat_input.get("1.0", tk.END).strip()
+        if not prompt:
+            messagebox.showwarning("缺少消息", "请先输入要发给 Hermes 的内容。")
+            return
+        if self.agent_chat_state_var.get() != "可对话":
+            messagebox.showwarning("Agent 未就绪", "请先确认 Docker、Hermes 和 API 都已准备好。")
+            return
+        session_name = self.agent_session_name_var.get().strip() or "neonpilot"
+        self.agent_result_text.insert(tk.END, f"\n你：{prompt}\n")
+        self.agent_result_text.insert(tk.END, "Hermes：处理中...\n")
+        self.agent_result_text.see(tk.END)
+        self.status_var.set("正在和 Hermes 对话")
+        self.agent_chat_input.delete("1.0", tk.END)
+
+        def worker() -> None:
+            try:
+                ok, stdout, stderr = run_hermes_query(
+                    prompt,
+                    session_name=session_name,
+                    model=self.agent_model_default_var.get().strip(),
+                    provider=self.agent_model_provider_var.get().strip(),
+                )
+                self.queue.put(("agent_chat", (prompt, ok, stdout, stderr)))
+            except Exception as exc:
+                self.queue.put(("agent_error", ("Hermes 对话", exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _start_agent_docker(self) -> None:
         self._start_agent_action("启动 Docker", start_docker_desktop)
@@ -1005,10 +1148,27 @@ class DesktopApp:
                     self.agent_result_text.insert("1.0", f"command: {command}\nok: {ok}\n\nstdout:\n{stdout}\n\nstderr:\n{stderr}")
                     self.status_var.set("Agent 命令执行完成" if ok else "Agent 命令执行失败")
                     self._refresh_agent_status(silent=True)
+                elif kind == "agent_chat":
+                    _prompt, ok, stdout, stderr = payload
+                    transcript = self.agent_result_text.get("1.0", tk.END).rstrip()
+                    if transcript.endswith("Hermes：处理中..."):
+                        transcript = transcript[: -len("Hermes：处理中...")].rstrip()
+                    response = (stdout or stderr or "").strip()
+                    block = f"{transcript}\nHermes：{response or '没有返回内容'}\n"
+                    self.agent_result_text.delete("1.0", tk.END)
+                    self.agent_result_text.insert("1.0", block.strip() + "\n")
+                    self.agent_result_text.see(tk.END)
+                    self.status_var.set("Hermes 对话完成" if ok else "Hermes 对话失败")
+                    self._refresh_agent_status(silent=True)
                 elif kind == "agent_error":
                     command, exc = payload
-                    self.agent_result_text.delete("1.0", tk.END)
-                    self.agent_result_text.insert("1.0", f"command: {command}\n\n{exc}")
+                    current = self.agent_result_text.get("1.0", tk.END).strip()
+                    if current:
+                        self.agent_result_text.delete("1.0", tk.END)
+                        self.agent_result_text.insert("1.0", current + f"\n\n{command}：{exc}")
+                    else:
+                        self.agent_result_text.delete("1.0", tk.END)
+                        self.agent_result_text.insert("1.0", f"command: {command}\n\n{exc}")
                     self.status_var.set("Agent 命令未执行")
                     messagebox.showwarning("Agent 环境未就绪", str(exc))
         except Empty:
