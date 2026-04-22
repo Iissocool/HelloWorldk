@@ -53,6 +53,13 @@ PROVIDER_BASE_URL_ENV_KEYS = {
 }
 
 
+def resolve_effective_provider(provider: str, base_url: str = "") -> str:
+    normalized = (provider or "").strip().lower()
+    if normalized in {"", "auto"} and (base_url or "").strip():
+        return "openai"
+    return normalized or "auto"
+
+
 @dataclass(slots=True)
 class HermesEnvironmentStatus:
     docker_cli_available: bool
@@ -262,10 +269,11 @@ def save_hermes_model_settings(settings: HermesModelSettings) -> Path:
     return config_path
 
 
-def load_hermes_provider_settings(provider: str) -> HermesProviderSettings:
+def load_hermes_provider_settings(provider: str, base_url: str = "") -> HermesProviderSettings:
     env_pairs = _read_env_pairs()
-    api_env_key = PROVIDER_ENV_KEYS.get(provider, "")
-    base_url_env_key = PROVIDER_BASE_URL_ENV_KEYS.get(provider, "")
+    effective_provider = resolve_effective_provider(provider, base_url)
+    api_env_key = PROVIDER_ENV_KEYS.get(effective_provider, "")
+    base_url_env_key = PROVIDER_BASE_URL_ENV_KEYS.get(effective_provider, "")
     return HermesProviderSettings(
         provider=provider,
         api_key=env_pairs.get(api_env_key, "") if api_env_key else "",
@@ -315,6 +323,7 @@ def run_hermes_query(
     session_name: str = "neonpilot",
     model: str = "",
     provider: str = "",
+    base_url: str = "",
 ) -> tuple[bool, str, str]:
     ready, message = start_docker_desktop()
     if not ready:

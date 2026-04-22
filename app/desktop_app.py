@@ -696,6 +696,8 @@ class DesktopApp:
             chat_state = "需先配置 API"
         self.agent_chat_state_var.set(chat_state)
         summary = status.summary
+        if self.agent_model_provider_var.get().strip() == "auto" and self.agent_model_base_url_var.get().strip():
+            summary += "\n- 当前已按 OpenAI 兼容地址处理，请填写对应 API Key。"
         if status.hermes_version:
             summary += f"\n- 版本：{status.hermes_version}"
         if status.notes:
@@ -937,9 +939,9 @@ class DesktopApp:
 
     def _load_agent_provider_settings(self) -> None:
         provider = self.agent_model_provider_var.get().strip() or "auto"
-        settings = load_hermes_provider_settings(provider)
+        settings = load_hermes_provider_settings(provider, self.agent_model_base_url_var.get().strip())
         self.agent_api_key_var.set(settings.api_key)
-        self.agent_api_env_var.set(settings.api_env_key or ("auto 模式请先选择具体提供方" if provider == "auto" else "当前提供方没有预设 API 环境变量"))
+        self.agent_api_env_var.set(settings.api_env_key or ("auto 模式下未识别到兼容提供方" if provider == "auto" else "当前提供方没有预设 API 环境变量"))
         self.agent_provider_base_url_var.set(settings.base_url)
         self.agent_provider_base_env_var.set(settings.base_url_env_key or ("当前提供方没有预设 Base URL 环境变量"))
         self.status_var.set("已读取 Hermes 提供方配置")
@@ -973,7 +975,7 @@ class DesktopApp:
     def _save_agent_settings(self) -> None:
         self._save_agent_model_settings()
         provider = self.agent_model_provider_var.get().strip() or "auto"
-        resolved = load_hermes_provider_settings(provider)
+        resolved = load_hermes_provider_settings(provider, self.agent_model_base_url_var.get().strip())
         provider_settings = HermesProviderSettings(
             provider=provider,
             api_key=self.agent_api_key_var.get().strip(),
@@ -1039,6 +1041,7 @@ class DesktopApp:
                     session_name=session_name,
                     model=self.agent_model_default_var.get().strip(),
                     provider=self.agent_model_provider_var.get().strip(),
+                    base_url=self.agent_model_base_url_var.get().strip(),
                 )
                 self.queue.put(("agent_chat", (prompt, ok, stdout, stderr)))
             except Exception as exc:
