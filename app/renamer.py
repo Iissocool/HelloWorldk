@@ -75,13 +75,13 @@ def apply_replace(text: str, find_text: str, replace_text: str, *, case_sensitiv
 
 def validate_filename(name: str) -> str | None:
     if not name:
-        return "empty filename"
+        return "文件名不能为空"
     if any(char in INVALID_FILENAME_CHARS for char in name):
-        return "contains invalid Windows filename characters"
+        return "文件名包含 Windows 不允许的字符"
     if name.endswith(" ") or name.endswith("."):
-        return "cannot end with a space or dot"
+        return "文件名不能以空格或句点结尾"
     if name in {".", ".."}:
-        return "reserved filename"
+        return "文件名不能是保留名称"
     return None
 
 
@@ -93,9 +93,9 @@ def build_rename_plan(request: RenameRunRequest) -> list[RenamePlanItem]:
     plan: list[RenamePlanItem] = []
 
     if request.mode == "replace" and not request.find_text:
-        raise ValueError("find_text is required when mode is replace")
+        raise ValueError("当前是“查找替换”模式，必须填写“查找文本”。")
     if request.step <= 0:
-        raise ValueError("step must be greater than 0")
+        raise ValueError("步长必须大于 0。")
 
     for source_path in files:
         try:
@@ -121,7 +121,7 @@ def build_rename_plan(request: RenameRunRequest) -> list[RenamePlanItem]:
                     source_path=source_path,
                     target_path=None,
                     status="fail",
-                    reason=f"template error: {exc}",
+                    reason=f"模板解析失败：{exc}",
                     index_value=index_value,
                 )
             )
@@ -151,7 +151,7 @@ def build_rename_plan(request: RenameRunRequest) -> list[RenamePlanItem]:
                     source_path=source_path,
                     target_path=target_path,
                     status="skipped",
-                    reason="no filename change",
+                    reason="文件名没有变化",
                     index_value=index_value,
                 )
             )
@@ -179,7 +179,7 @@ def build_rename_plan(request: RenameRunRequest) -> list[RenamePlanItem]:
         target_key = str(item.target_path).lower()
         if target_key in seen_targets:
             item.status = "fail"
-            item.reason = f"duplicate target with {seen_targets[target_key].name}"
+            item.reason = f"目标文件名重复，和 {seen_targets[target_key].name} 冲突"
             continue
         seen_targets[target_key] = item.source_path
 
@@ -189,7 +189,7 @@ def build_rename_plan(request: RenameRunRequest) -> list[RenamePlanItem]:
             and target_key not in moving_source_keys
         ):
             item.status = "fail"
-            item.reason = "target file already exists"
+            item.reason = "目标文件已经存在"
 
     return plan
 
@@ -212,7 +212,7 @@ def execute_rename_plan(plan: Iterable[RenamePlanItem]) -> tuple[list[RenamePlan
         for temp_path, original_path, target_path in staged:
             temp_path.rename(target_path)
             completed.append((target_path, original_path))
-            stdout_lines.append(f"renamed {original_path.name} -> {target_path.name}")
+            stdout_lines.append(f"已重命名：{original_path.name} -> {target_path.name}")
     except Exception as exc:
         for target_path, original_path in reversed(completed):
             try:
@@ -229,8 +229,8 @@ def execute_rename_plan(plan: Iterable[RenamePlanItem]) -> tuple[list[RenamePlan
 
         for item in actionable_items:
             item.status = "fail"
-            item.reason = f"rename aborted: {exc}"
-        stdout_lines.append(f"rename aborted: {exc}")
+            item.reason = f"批量命名已中止：{exc}"
+        stdout_lines.append(f"批量命名已中止：{exc}")
         return list(plan), stdout_lines
 
     for item in actionable_items:
@@ -238,8 +238,8 @@ def execute_rename_plan(plan: Iterable[RenamePlanItem]) -> tuple[list[RenamePlan
 
     for item in plan:
         if item.status == "skipped":
-            stdout_lines.append(f"skipped {item.source_path.name}: {item.reason}")
+            stdout_lines.append(f"跳过 {item.source_path.name}: {item.reason}")
         elif item.status == "fail":
-            stdout_lines.append(f"failed {item.source_path.name}: {item.reason}")
+            stdout_lines.append(f"失败 {item.source_path.name}: {item.reason}")
 
     return list(plan), stdout_lines

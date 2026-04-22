@@ -73,6 +73,7 @@ class DesktopApp:
         self.rename_recurse_var = tk.BooleanVar(value=False)
         self.rename_case_sensitive_var = tk.BooleanVar(value=False)
         self.rename_keep_extension_var = tk.BooleanVar(value=True)
+        self.rename_mode_help_var = tk.StringVar()
 
         self._apply_window_icon()
         self._build_ui()
@@ -195,24 +196,111 @@ class DesktopApp:
     def _build_rename_tab(self) -> None:
         form, result = self._build_form_and_result(self.rename_tab)
         self._labeled_entry(form, "输入目录", self.rename_input_var, lambda: self._pick_directory(self.rename_input_var))
-        self._labeled_combo(form, "模式", self.rename_mode_var, RENAME_MODE_CHOICES)
-        self._labeled_entry(form, "模板", self.rename_template_var)
-        self._labeled_entry(form, "查找文本", self.rename_find_var)
-        self._labeled_entry(form, "替换文本", self.rename_replace_var)
+        self.rename_mode_combo = self._labeled_combo(form, "模式", self.rename_mode_var, RENAME_MODE_CHOICES)
+        ttk.Label(
+            form,
+            textvariable=self.rename_mode_help_var,
+            foreground="#6b6258",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        self.rename_template_entry = self._labeled_entry(form, "模板", self.rename_template_var)
+        ttk.Label(
+            form,
+            text="模板模式使用。示例：{index:03d}_{name}。含义是：001_原文件名、002_原文件名。"
+            " 如果当前是 replace 模式，这一项会自动忽略。",
+            foreground="#6b6258",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 6))
+
+        self.rename_find_entry = self._labeled_entry(form, "查找文本", self.rename_find_var)
+        ttk.Label(
+            form,
+            text="replace 模式必填。这里填写你想被替换掉的文字，例如 old。",
+            foreground="#6b6258",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 6))
+
+        self.rename_replace_entry = self._labeled_entry(form, "替换文本", self.rename_replace_var)
+        ttk.Label(
+            form,
+            text="这里填写替换后的文字，例如 new。可以留空，留空表示把找到的文字删除。",
+            foreground="#6b6258",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 6))
+
         self._labeled_entry(form, "前缀", self.rename_prefix_var)
+        ttk.Label(form, text="会加在最终文件名前面，例如：商品_", foreground="#6b6258").pack(anchor="w", pady=(0, 6))
         self._labeled_entry(form, "后缀", self.rename_suffix_var)
-        self._labeled_entry(form, "起始序号", self.rename_start_var)
-        self._labeled_entry(form, "步长", self.rename_step_var)
+        ttk.Label(form, text="会加在最终文件名后面，例如：_主图", foreground="#6b6258").pack(anchor="w", pady=(0, 6))
+        self.rename_start_entry = self._labeled_entry(form, "起始序号", self.rename_start_var)
+        self.rename_step_entry = self._labeled_entry(form, "步长", self.rename_step_var)
         self._labeled_entry(form, "扩展名过滤", self.rename_extensions_var)
         ttk.Label(
             form,
-            text="模板变量：{index} / {index:03d} / {name} / {stem} / {parent} / {ext}",
+            text=(
+                "模板变量说明：\n"
+                "{index} = 当前序号，例如 1、2、3\n"
+                "{index:03d} = 当前序号补零到 3 位，例如 001、002、003\n"
+                "{name} = 原文件名，不含扩展名，例如 IMG_0001\n"
+                "{stem} = 原文件名，不含扩展名，和 {name} 一样\n"
+                "{parent} = 当前文件所在文件夹的名字\n"
+                "{ext} = 原扩展名，不带点，例如 jpg、png"
+            ),
+            foreground="#6b6258",
+            wraplength=520,
+            justify="left",
         ).pack(anchor="w", pady=(4, 6))
+        ttk.Label(
+            form,
+            text="常见填写方法：\n"
+            "1. 模板模式：填写模板，例如 {index:03d}_{name}\n"
+            "2. 查找替换模式：填写“查找文本”和“替换文本”，例如把 old 改成 new\n"
+            "3. 前缀：会加在文件名前面，例如 商品_\n"
+            "4. 后缀：会加在文件名后面，例如 _主图\n"
+            "5. 扩展名过滤示例：.png,.jpg,.jpeg。留空表示当前目录下的所有文件都参与命名。",
+            foreground="#6b6258",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 6))
         self._labeled_check(form, "递归子目录", self.rename_recurse_var)
         self._labeled_check(form, "查找替换区分大小写", self.rename_case_sensitive_var)
         self._labeled_check(form, "保留原始扩展名", self.rename_keep_extension_var)
         ttk.Button(form, text="开始批量命名", command=self._run_rename).pack(fill="x", pady=(10, 0))
         self.rename_result_text = result
+        self.rename_mode_var.trace_add("write", self._on_rename_mode_change)
+        self._update_rename_mode_ui()
+
+    def _on_rename_mode_change(self, *_args) -> None:
+        self._update_rename_mode_ui()
+
+    def _set_entry_state(self, entry, enabled: bool) -> None:
+        if entry is None:
+            return
+        state = "normal" if enabled else "disabled"
+        try:
+            entry.configure(state=state)
+        except tk.TclError:
+            pass
+
+    def _update_rename_mode_ui(self) -> None:
+        mode = self.rename_mode_var.get().strip()
+        is_template = mode == "template"
+        self.rename_mode_help_var.set(
+            "当前是模板模式：请填写“模板”，系统会按模板生成新文件名。"
+            if is_template
+            else "当前是 replace 模式：请填写“查找文本”和“替换文本”。例如把 old 改成 new。"
+            " 如果“替换文本”留空，表示把查找到的文字直接删除。模板、起始序号、步长在这个模式下不会生效。"
+        )
+        self._set_entry_state(getattr(self, "rename_template_entry", None), is_template)
+        self._set_entry_state(getattr(self, "rename_start_entry", None), is_template)
+        self._set_entry_state(getattr(self, "rename_step_entry", None), is_template)
+        self._set_entry_state(getattr(self, "rename_find_entry", None), not is_template)
+        self._set_entry_state(getattr(self, "rename_replace_entry", None), not is_template)
 
     def _build_history_tab(self) -> None:
         controls = ttk.Frame(self.history_tab)
@@ -251,22 +339,25 @@ class DesktopApp:
         result.pack(fill="both", expand=True, pady=(8, 0))
         return form, result
 
-    def _labeled_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar, browse_command=None) -> None:
+    def _labeled_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar, browse_command=None):
         wrapper = ttk.Frame(parent)
         wrapper.pack(fill="x", pady=6)
         ttk.Label(wrapper, text=label).pack(anchor="w")
         row = ttk.Frame(wrapper)
         row.pack(fill="x", pady=(4, 0))
-        ttk.Entry(row, textvariable=variable).pack(side="left", fill="x", expand=True)
+        entry = ttk.Entry(row, textvariable=variable)
+        entry.pack(side="left", fill="x", expand=True)
         if browse_command is not None:
             ttk.Button(row, text="浏览", command=browse_command).pack(side="left", padx=(8, 0))
+        return entry
 
-    def _labeled_combo(self, parent: ttk.Frame, label: str, variable: tk.StringVar, values: list[str]) -> None:
+    def _labeled_combo(self, parent: ttk.Frame, label: str, variable: tk.StringVar, values: list[str]):
         wrapper = ttk.Frame(parent)
         wrapper.pack(fill="x", pady=6)
         ttk.Label(wrapper, text=label).pack(anchor="w")
         combo = ttk.Combobox(wrapper, textvariable=variable, values=values, state="readonly")
         combo.pack(fill="x", pady=(4, 0))
+        return combo
 
     def _labeled_check(self, parent: ttk.Frame, label: str, variable: tk.BooleanVar) -> None:
         ttk.Checkbutton(parent, text=label, variable=variable).pack(anchor="w", pady=4)
@@ -424,11 +515,26 @@ class DesktopApp:
         except ValueError:
             messagebox.showwarning("参数错误", "起始序号和步长必须是整数。")
             return
+
+        mode = self.rename_mode_var.get().strip()
+        template = self.rename_template_var.get()
+        find_text = self.rename_find_var.get().strip()
+
+        if mode == "template" and not template.strip():
+            messagebox.showwarning("模板不能为空", "当前是模板模式，请先填写“模板”。")
+            return
+        if mode == "replace" and not find_text:
+            messagebox.showwarning(
+                "查找文本不能为空",
+                "当前是 replace 模式，请先填写“查找文本”。\n例如：把 old 替换成 new。",
+            )
+            return
+
         request = RenameRunRequest(
             input_dir=self.rename_input_var.get(),
-            mode=self.rename_mode_var.get(),
-            template=self.rename_template_var.get(),
-            find_text=self.rename_find_var.get(),
+            mode=mode,
+            template=template,
+            find_text=find_text,
             replace_text=self.rename_replace_var.get(),
             prefix=self.rename_prefix_var.get(),
             suffix=self.rename_suffix_var.get(),
@@ -554,5 +660,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
