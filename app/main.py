@@ -9,7 +9,14 @@ from fastapi.templating import Jinja2Templates
 
 from .catalog import MODEL_CATALOG
 from .executor import ExecutionError, LocalExecutor
-from .models import BatchRunRequest, RenameRunRequest, SingleRunRequest, SmartRunRequest
+from .models import (
+    AIImageRunRequest,
+    AIImageTestRequest,
+    BatchRunRequest,
+    RenameRunRequest,
+    SingleRunRequest,
+    SmartRunRequest,
+)
 from .planner import build_runtime_plan
 from .hardware import detect_hardware_profile
 
@@ -32,6 +39,7 @@ def render_index(request: Request, **overrides) -> HTMLResponse:
         "batch_result": None,
         "smart_result": None,
         "rename_result": None,
+        "ai_result": None,
         "error": None,
     }
     context.update(overrides)
@@ -160,12 +168,14 @@ def run_rename(
     input_dir: str = Form(...),
     mode: str = Form("template"),
     template: str = Form("{index:03d}_{name}"),
+    fresh_name: str = Form("image_"),
     find_text: str = Form(""),
     replace_text: str = Form(""),
     prefix: str = Form(""),
     suffix: str = Form(""),
     start_index: int = Form(1),
     step: int = Form(1),
+    padding_width: int = Form(3),
     recurse: bool = Form(False),
     extensions: str = Form(""),
     case_sensitive: bool = Form(False),
@@ -177,12 +187,14 @@ def run_rename(
                 input_dir=input_dir,
                 mode=mode,
                 template=template,
+                fresh_name=fresh_name,
                 find_text=find_text,
                 replace_text=replace_text,
                 prefix=prefix,
                 suffix=suffix,
                 start_index=start_index,
                 step=step,
+                padding_width=padding_width,
                 recurse=recurse,
                 extensions=extensions,
                 case_sensitive=case_sensitive,
@@ -192,6 +204,18 @@ def run_rename(
         return render_index(request, rename_result=rename_result)
     except ExecutionError as exc:
         return render_index(request, error=str(exc))
+
+
+@app.post("/api/ai/test")
+def ai_test(payload: AIImageTestRequest) -> dict:
+    result = executor.run_ai_test(payload)
+    return result.model_dump()
+
+
+@app.post("/api/ai/generate")
+def ai_generate(payload: AIImageRunRequest) -> dict:
+    result = executor.run_ai_image(payload)
+    return result.model_dump()
 
 
 @app.get("/refresh")

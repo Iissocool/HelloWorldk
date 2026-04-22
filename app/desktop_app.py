@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import threading
+from pathlib import Path
 from queue import Empty, Queue
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -8,12 +10,21 @@ from tkinter.scrolledtext import ScrolledText
 
 from PIL import Image, ImageTk
 
+from .ai_image import load_ai_settings, mask_api_key, save_ai_settings
 from .catalog import MODEL_CATALOG
 from .config import ICON_ICO, ICON_PNG, SPLASH_PNG
 from .executor import ExecutionError, LocalExecutor
 from .hardware import detect_hardware_profile
 from .history import HistoryStore
-from .models import BatchRunRequest, RenameRunRequest, SingleRunRequest, SmartRunRequest
+from .models import (
+    AIImageRunRequest,
+    AIImageTestRequest,
+    AIProviderSettings,
+    BatchRunRequest,
+    RenameRunRequest,
+    SingleRunRequest,
+    SmartRunRequest,
+)
 from .planner import build_runtime_plan
 
 
@@ -34,6 +45,8 @@ class DesktopApp:
         self.executor = LocalExecutor(self.history_store)
         self.queue: Queue[tuple[str, object]] = Queue()
         self.status_var = tk.StringVar(value="Ready")
+        self.ai_settings = load_ai_settings()
+        self.ai_preview_photo = None
 
         self.hardware = detect_hardware_profile()
         self.plan = build_runtime_plan()
@@ -77,6 +90,16 @@ class DesktopApp:
         self.rename_keep_extension_var = tk.BooleanVar(value=True)
         self.rename_mode_help_var = tk.StringVar()
 
+        self.ai_base_url_var = tk.StringVar(value=self.ai_settings.base_url)
+        self.ai_api_key_var = tk.StringVar(value=self.ai_settings.api_key)
+        self.ai_model_var = tk.StringVar(value=self.ai_settings.model)
+        self.ai_timeout_var = tk.StringVar(value=str(self.ai_settings.timeout_sec))
+        self.ai_count_var = tk.StringVar(value="1")
+        self.ai_size_var = tk.StringVar(value="1024x1024")
+        self.ai_quality_var = tk.StringVar(value="auto")
+        self.ai_output_dir_var = tk.StringVar(value="")
+        self.ai_prefix_var = tk.StringVar(value="ai_")
+
         self._apply_window_icon()
         self._build_ui()
         self._refresh_dashboard()
@@ -119,6 +142,7 @@ class DesktopApp:
         self.batch_tab = ttk.Frame(notebook, padding=12)
         self.smart_tab = ttk.Frame(notebook, padding=12)
         self.rename_tab = ttk.Frame(notebook, padding=12)
+        self.ai_tab = ttk.Frame(notebook, padding=12)
         self.history_tab = ttk.Frame(notebook, padding=12)
 
         notebook.add(self.dashboard_tab, text="仪表盘")
@@ -126,6 +150,7 @@ class DesktopApp:
         notebook.add(self.batch_tab, text="固定批处理")
         notebook.add(self.smart_tab, text="智能批处理")
         notebook.add(self.rename_tab, text="批量命名")
+        notebook.add(self.ai_tab, text="AI 生图")
         notebook.add(self.history_tab, text="任务历史")
 
         self._build_dashboard_tab()
@@ -133,6 +158,7 @@ class DesktopApp:
         self._build_batch_tab()
         self._build_smart_tab()
         self._build_rename_tab()
+        self._build_ai_tab()
         self._build_history_tab()
 
         ttk.Label(outer, textvariable=self.status_var, anchor="w").pack(fill="x", pady=(10, 0))
@@ -277,6 +303,57 @@ class DesktopApp:
         self._set_entry_state(getattr(self, "rename_step_entry", None), is_template or is_fresh)
         self._set_entry_state(getattr(self, "rename_padding_entry", None), is_fresh)
 
+    def _build_ai_tab(self) -> None:
+        frame = ttk.Panedwindow(self.ai_tab, orient="horizontal")
+        frame.pack(fill="both", expand=True)
+
+        form = ttk.Frame(frame, padding=6)
+        right = ttk.Frame(frame, padding=6)
+        frame.add(form, weight=2)
+        frame.add(right, weight=3)
+
+        self._labeled_entry(form, "服务地址", self.ai_base_url_var)
+        self._labeled_secret_entry(form, "API Key", self.ai_api_key_var)
+        self._labeled_entry(form, "模型", self.ai_model_var)
+        self._labeled_entry(form, "超时秒数", self.ai_timeout_var)
+        self._labeled_entry(form, "输出目录", self.ai_output_dir_var, lambda: self._pick_directory(self.ai_output_dir_var))
+        self._labeled_entry(form, "文件名前缀", self.ai_prefix_var)
+        self._labeled_entry(form, "生成张数", self.ai_count_var)
+        self._labeled_combo(form, "尺寸", self.ai_size_var, ["1024x1024", "1536x1024", "1024x1536"])
+        self._labeled_combo(form, "质量", self.ai_quality_var, ["auto", "high", "medium", "low"])
+
+        ttk.Label(
+            form,
+            text="简要说明：支持 OpenAI 兼容接口。API Key 会加密保存在当前 Windows 用户空间。",
+            foreground="#6b6258",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 6))
+        ttk.Label(form, text="提示词").pack(anchor="w")
+        self.ai_prompt_text = ScrolledText(form, wrap="word", height=8)
+        self.ai_prompt_text.pack(fill="x", pady=(4, 8))
+
+        button_row = ttk.Frame(form)
+        button_row.pack(fill="x", pady=(2, 8))
+        ttk.Button(button_row, text="保存配置", command=self._save_ai_settings).pack(side="left")
+        ttk.Button(button_row, text="重新读取", command=self._reload_ai_settings).pack(side="left", padx=(8, 0))
+        ttk.Button(button_row, text="测试连接", command=self._run_ai_test).pack(side="left", padx=(8, 0))
+        ttk.Button(button_row, text="开始生成", command=self._run_ai_image).pack(side="left", padx=(8, 0))
+        ttk.Button(button_row, text="打开目录", command=self._open_ai_output_dir).pack(side="left", padx=(8, 0))
+
+        ttk.Label(right, text="图片预览", font=("Segoe UI Semibold", 12)).pack(anchor="w")
+        self.ai_preview_label = ttk.Label(right, text="暂无图片", anchor="center")
+        self.ai_preview_label.pack(fill="both", expand=False, pady=(8, 8), ipady=120)
+
+        ttk.Label(right, text="已生成文件", font=("Segoe UI Semibold", 12)).pack(anchor="w")
+        self.ai_files_list = tk.Listbox(right, height=8)
+        self.ai_files_list.pack(fill="x", pady=(8, 8))
+        self.ai_files_list.bind("<<ListboxSelect>>", self._on_ai_file_select)
+
+        ttk.Label(right, text="运行日志", font=("Segoe UI Semibold", 12)).pack(anchor="w")
+        self.ai_result_text = ScrolledText(right, wrap="word")
+        self.ai_result_text.pack(fill="both", expand=True, pady=(8, 0))
+
     def _build_history_tab(self) -> None:
         controls = ttk.Frame(self.history_tab)
         controls.pack(fill="x", pady=(0, 8))
@@ -333,6 +410,14 @@ class DesktopApp:
         combo = ttk.Combobox(wrapper, textvariable=variable, values=values, state="readonly")
         combo.pack(fill="x", pady=(4, 0))
         return combo
+
+    def _labeled_secret_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar):
+        wrapper = ttk.Frame(parent)
+        wrapper.pack(fill="x", pady=6)
+        ttk.Label(wrapper, text=label).pack(anchor="w")
+        entry = ttk.Entry(wrapper, textvariable=variable, show="*")
+        entry.pack(fill="x", pady=(4, 0))
+        return entry
 
     def _labeled_check(self, parent: ttk.Frame, label: str, variable: tk.BooleanVar) -> None:
         ttk.Checkbutton(parent, text=label, variable=variable).pack(anchor="w", pady=4)
@@ -529,6 +614,110 @@ class DesktopApp:
         )
         self._start_job("rename", request, self.rename_result_text)
 
+    def _save_ai_settings(self) -> None:
+        try:
+            settings = AIProviderSettings(
+                base_url=self.ai_base_url_var.get().strip(),
+                model=self.ai_model_var.get().strip(),
+                api_key=self.ai_api_key_var.get().strip(),
+                timeout_sec=int(self.ai_timeout_var.get().strip() or "120"),
+            )
+        except ValueError:
+            messagebox.showwarning("参数错误", "超时秒数必须是整数。")
+            return
+        if not settings.base_url or not settings.model:
+            messagebox.showwarning("信息不完整", "请先填写服务地址和模型。")
+            return
+        save_ai_settings(settings)
+        self.status_var.set(f"AI 配置已保存，Key：{mask_api_key(settings.api_key)}")
+
+    def _reload_ai_settings(self) -> None:
+        settings = load_ai_settings()
+        self.ai_base_url_var.set(settings.base_url)
+        self.ai_api_key_var.set(settings.api_key)
+        self.ai_model_var.set(settings.model)
+        self.ai_timeout_var.set(str(settings.timeout_sec))
+        self.status_var.set("已重新读取 AI 配置")
+
+    def _run_ai_test(self) -> None:
+        if not self.ai_base_url_var.get().strip() or not self.ai_api_key_var.get().strip():
+            messagebox.showwarning("信息不完整", "请先填写服务地址和 API Key。")
+            return
+        try:
+            timeout_sec = int(self.ai_timeout_var.get().strip() or "30")
+        except ValueError:
+            messagebox.showwarning("参数错误", "超时秒数必须是整数。")
+            return
+        request = AIImageTestRequest(
+            base_url=self.ai_base_url_var.get().strip(),
+            api_key=self.ai_api_key_var.get().strip(),
+            timeout_sec=timeout_sec,
+        )
+        self._start_job("ai_test", request, self.ai_result_text)
+
+    def _run_ai_image(self) -> None:
+        prompt = self.ai_prompt_text.get("1.0", tk.END).strip()
+        if not prompt:
+            messagebox.showwarning("缺少提示词", "请先填写提示词。")
+            return
+        if not self.ai_output_dir_var.get().strip():
+            messagebox.showwarning("缺少目录", "请先选择输出目录。")
+            return
+        try:
+            timeout_sec = int(self.ai_timeout_var.get().strip() or "180")
+            image_count = int(self.ai_count_var.get().strip() or "1")
+        except ValueError:
+            messagebox.showwarning("参数错误", "超时秒数和生成张数必须是整数。")
+            return
+        request = AIImageRunRequest(
+            base_url=self.ai_base_url_var.get().strip(),
+            api_key=self.ai_api_key_var.get().strip(),
+            model=self.ai_model_var.get().strip(),
+            prompt=prompt,
+            output_dir=self.ai_output_dir_var.get().strip(),
+            image_count=image_count,
+            size=self.ai_size_var.get().strip(),
+            quality=self.ai_quality_var.get().strip(),
+            file_prefix=self.ai_prefix_var.get().strip() or "ai_",
+            timeout_sec=timeout_sec,
+        )
+        self._start_job("image", request, self.ai_result_text)
+
+    def _open_ai_output_dir(self) -> None:
+        output_dir = self.ai_output_dir_var.get().strip()
+        if not output_dir:
+            return
+        path = Path(output_dir)
+        if not path.exists():
+            messagebox.showwarning("目录不存在", "当前输出目录还不存在。")
+            return
+        os.startfile(str(path))
+
+    def _on_ai_file_select(self, _event=None) -> None:
+        selection = self.ai_files_list.curselection()
+        if not selection:
+            return
+        file_path = self.ai_files_list.get(selection[0])
+        self._show_ai_preview(file_path)
+
+    def _show_ai_preview(self, file_path: str) -> None:
+        path = Path(file_path)
+        if not path.exists():
+            return
+        image = Image.open(path).convert("RGBA")
+        image.thumbnail((700, 520))
+        self.ai_preview_photo = ImageTk.PhotoImage(image)
+        self.ai_preview_label.configure(image=self.ai_preview_photo, text="")
+
+    def _update_ai_result_view(self, result) -> None:
+        self.ai_files_list.delete(0, tk.END)
+        for artifact in result.artifacts:
+            self.ai_files_list.insert(tk.END, artifact)
+        if result.artifacts:
+            self._show_ai_preview(result.artifacts[0])
+        else:
+            self.ai_preview_label.configure(image="", text="暂无图片")
+
     def _start_job(self, job_type: str, request, output_widget: ScrolledText) -> None:
         output_widget.delete("1.0", tk.END)
         output_widget.insert("1.0", f"Starting {job_type} job...\n")
@@ -542,6 +731,10 @@ class DesktopApp:
                     result = self.executor.run_batch(request)
                 elif job_type == "rename":
                     result = self.executor.run_rename(request)
+                elif job_type == "ai_test":
+                    result = self.executor.run_ai_test(request)
+                elif job_type == "image":
+                    result = self.executor.run_ai_image(request)
                 else:
                     result = self.executor.run_smart(request)
                 self.queue.put(("result", (job_type, output_widget, result)))
@@ -558,6 +751,8 @@ class DesktopApp:
                     job_type, output_widget, result = payload
                     output_widget.delete("1.0", tk.END)
                     output_widget.insert("1.0", self._format_result(result))
+                    if job_type == "image":
+                        self._update_ai_result_view(result)
                     self.status_var.set(result.summary or f"{job_type} 任务完成")
                     self._refresh_history()
                 else:
@@ -579,6 +774,7 @@ class DesktopApp:
             f"summary: {result.summary}",
             f"output: {result.output_path or '-'}",
             f"report: {result.report_path or '-'}",
+            f"artifacts: {len(result.artifacts or [])}",
             "",
             "stdout:",
             result.stdout or "",

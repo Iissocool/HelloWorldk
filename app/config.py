@@ -50,6 +50,7 @@ DATA_ROOT = Path(
         "BACKGROUND_APP_DATA_DIR", WORKSPACE_ROOT / "data" / "background-desktop"
     )
 )
+AI_SETTINGS_PATH = DATA_ROOT / "ai_provider.json"
 REPORTS_ROOT = Path(
     os.environ.get("BACKGROUND_APP_REPORTS_DIR", WORKSPACE_ROOT / "reports")
 )

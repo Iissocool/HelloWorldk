@@ -20,7 +20,7 @@ BackendId = Literal[
     "migraphx",
     "cpu",
 ]
-JobType = Literal["single", "batch", "smart", "rename"]
+JobType = Literal["single", "batch", "smart", "rename", "image"]
 RenameMode = Literal["template", "replace", "fresh"]
 
 
@@ -117,6 +117,32 @@ class RenameRunRequest(BaseModel):
     keep_extension: bool = True
 
 
+class AIProviderSettings(BaseModel):
+    base_url: str = "https://api.openai.com"
+    model: str = "gpt-image-1"
+    api_key: str = ""
+    timeout_sec: int = 120
+
+
+class AIImageTestRequest(BaseModel):
+    base_url: str
+    api_key: str
+    timeout_sec: int = 30
+
+
+class AIImageRunRequest(BaseModel):
+    base_url: str
+    api_key: str
+    model: str
+    prompt: str
+    output_dir: str
+    image_count: int = 1
+    size: str = "1024x1024"
+    quality: str = "auto"
+    file_prefix: str = "image_"
+    timeout_sec: int = 180
+
+
 class ExecutionResult(BaseModel):
     ok: bool
     command: list[str]
@@ -128,3 +154,4 @@ class ExecutionResult(BaseModel):
     backend_used: str | None = None
     model_used: str | None = None
     summary: str | None = None
+    artifacts: list[str] = Field(default_factory=list)

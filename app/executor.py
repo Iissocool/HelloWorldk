@@ -6,11 +6,20 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
+from .ai_image import generate_images, test_ai_provider
 from .catalog import MODEL_MAP
 from .config import RUNTIME_ROOT, WORKSPACE_ROOT
 from .hardware import detect_hardware_profile
 from .history import HistoryStore
-from .models import BatchRunRequest, ExecutionResult, RenameRunRequest, SingleRunRequest, SmartRunRequest
+from .models import (
+    AIImageRunRequest,
+    AIImageTestRequest,
+    BatchRunRequest,
+    ExecutionResult,
+    RenameRunRequest,
+    SingleRunRequest,
+    SmartRunRequest,
+)
 from .planner import build_runtime_plan
 from .renamer import build_rename_plan, execute_rename_plan
 from .selection import analyze_image, choose_category, choose_model
@@ -525,6 +534,57 @@ class LocalExecutor:
                 model=f"rename:{request.mode}",
                 input_ref=str(input_dir),
                 output_ref=str(input_dir),
+                result=result,
+            )
+        return result
+
+    def run_ai_test(self, request: AIImageTestRequest) -> ExecutionResult:
+        try:
+            summary, preview_models = test_ai_provider(request)
+        except Exception as exc:
+            raise ExecutionError(str(exc)) from exc
+        return ExecutionResult(
+            ok=True,
+            command=["internal:ai-test"],
+            stdout=summary,
+            stderr="",
+            return_code=0,
+            backend_used="openai-compatible",
+            model_used=preview_models[0] if preview_models else None,
+            summary="AI 接口连接正常。",
+        )
+
+    def run_ai_image(self, request: AIImageRunRequest, *, log_history: bool = True) -> ExecutionResult:
+        if not request.prompt.strip():
+            raise ExecutionError("提示词不能为空。")
+        if not request.api_key.strip():
+            raise ExecutionError("API Key 不能为空。")
+        if request.image_count < 1:
+            raise ExecutionError("生成张数必须大于 0。")
+        try:
+            files, logs = generate_images(request)
+        except Exception as exc:
+            raise ExecutionError(str(exc)) from exc
+
+        result = ExecutionResult(
+            ok=True,
+            command=["internal:ai-image"],
+            stdout="\n".join(logs),
+            stderr="",
+            return_code=0,
+            output_path=files[0] if files else None,
+            backend_used="openai-compatible",
+            model_used=request.model,
+            summary=f"已生成 {len(files)} 张图片。",
+            artifacts=files,
+        )
+        if log_history:
+            self._log_job(
+                job_type="image",
+                backend="openai-compatible",
+                model=request.model,
+                input_ref=request.prompt,
+                output_ref=request.output_dir,
                 result=result,
             )
         return result
