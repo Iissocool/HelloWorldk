@@ -10,8 +10,9 @@ from .catalog import MODEL_MAP
 from .config import RUNTIME_ROOT, WORKSPACE_ROOT
 from .hardware import detect_hardware_profile
 from .history import HistoryStore
-from .models import BatchRunRequest, ExecutionResult, SingleRunRequest, SmartRunRequest
+from .models import BatchRunRequest, ExecutionResult, RenameRunRequest, SingleRunRequest, SmartRunRequest
 from .planner import build_runtime_plan
+from .renamer import build_rename_plan, execute_rename_plan
 from .selection import analyze_image, choose_category, choose_model
 
 
@@ -460,6 +461,70 @@ class LocalExecutor:
                 model=model_label,
                 input_ref=str(input_dir),
                 output_ref=str(output_dir),
+                result=result,
+            )
+        return result
+
+    def run_rename(self, request: RenameRunRequest, *, log_history: bool = True) -> ExecutionResult:
+        input_dir = Path(request.input_dir)
+        if not input_dir.is_dir():
+            raise ExecutionError(f"Input directory does not exist: {input_dir}")
+
+        try:
+            plan = build_rename_plan(request)
+        except ValueError as exc:
+            raise ExecutionError(str(exc)) from exc
+
+        if not plan:
+            raise ExecutionError(f"No files found in: {input_dir}")
+
+        plan, stdout_lines = execute_rename_plan(plan)
+        rows: list[dict[str, str]] = []
+        for item in plan:
+            rows.append(
+                {
+                    "input": str(item.source_path),
+                    "output": str(item.target_path) if item.target_path else "",
+                    "model": request.mode,
+                    "backend": "internal",
+                    "status": item.status,
+                    "reason": item.reason,
+                }
+            )
+
+        report_path = input_dir / "_rename_report.csv"
+        with report_path.open("w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["input", "output", "model", "backend", "status", "reason"],
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+
+        success_count = sum(1 for row in rows if row["status"] == "ok")
+        fail_count = sum(1 for row in rows if row["status"] == "fail")
+        skip_count = sum(1 for row in rows if row["status"] == "skipped")
+        result = ExecutionResult(
+            ok=fail_count == 0,
+            command=["internal:rename"],
+            stdout="\n".join(stdout_lines + [f"Report: {report_path}"]),
+            stderr="",
+            return_code=0 if fail_count == 0 else 1,
+            report_path=str(report_path),
+            backend_used="internal",
+            model_used=f"rename:{request.mode}",
+            summary=(
+                f"rename processed {len(rows)} files: "
+                f"{success_count} renamed, {fail_count} failed, {skip_count} skipped."
+            ),
+        )
+        if log_history:
+            self._log_job(
+                job_type="rename",
+                backend="internal",
+                model=f"rename:{request.mode}",
+                input_ref=str(input_dir),
+                output_ref=str(input_dir),
                 result=result,
             )
         return result

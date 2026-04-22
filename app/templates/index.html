@@ -167,6 +167,36 @@
     </section>
 
     <section class="card">
+      <h2>批量命名</h2>
+      <form method="post" action="/run/rename" class="form-block">
+        <label>输入目录<input name="input_dir" placeholder="W:\images\input" required /></label>
+        <label>模式
+          <select name="mode">
+            <option value="template">template</option>
+            <option value="replace">replace</option>
+          </select>
+        </label>
+        <label>模板<input name="template" value="{index:03d}_{name}" /></label>
+        <label>查找文本<input name="find_text" placeholder="old" /></label>
+        <label>替换文本<input name="replace_text" placeholder="new" /></label>
+        <label>前缀<input name="prefix" placeholder="prefix_" /></label>
+        <label>后缀<input name="suffix" placeholder="_suffix" /></label>
+        <label>起始序号<input name="start_index" type="number" value="1" /></label>
+        <label>步长<input name="step" type="number" value="1" /></label>
+        <label>扩展名过滤<input name="extensions" placeholder=".png,.jpg,.jpeg" /></label>
+        <p class="summary-line">模板变量：<code>{index}</code> <code>{index:03d}</code> <code>{name}</code> <code>{stem}</code> <code>{parent}</code> <code>{ext}</code></p>
+        <label class="inline"><input type="checkbox" name="recurse" /> 递归子目录</label>
+        <label class="inline"><input type="checkbox" name="case_sensitive" /> 查找替换区分大小写</label>
+        <label class="inline"><input type="checkbox" name="keep_extension" checked /> 保留原始扩展名</label>
+        <button type="submit">运行批量命名</button>
+      </form>
+      {% if rename_result %}
+      <p class="summary-line">{{ rename_result.summary }}</p>
+      <pre>{{ rename_result.stdout or rename_result.stderr }}</pre>
+      {% endif %}
+    </section>
+
+    <section class="card">
       <h2>最近任务</h2>
       <table>
         <thead>

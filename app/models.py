@@ -20,7 +20,8 @@ BackendId = Literal[
     "migraphx",
     "cpu",
 ]
-JobType = Literal["single", "batch", "smart"]
+JobType = Literal["single", "batch", "smart", "rename"]
+RenameMode = Literal["template", "replace"]
 
 
 @dataclass(slots=True)
@@ -96,6 +97,22 @@ class SmartRunRequest(BaseModel):
     include_generated: bool = False
     session_json: dict = Field(default_factory=dict)
     remove_json: dict = Field(default_factory=dict)
+
+
+class RenameRunRequest(BaseModel):
+    input_dir: str
+    mode: RenameMode = "template"
+    template: str = "{index:03d}_{name}"
+    find_text: str = ""
+    replace_text: str = ""
+    prefix: str = ""
+    suffix: str = ""
+    start_index: int = 1
+    step: int = 1
+    recurse: bool = False
+    extensions: str = ""
+    case_sensitive: bool = False
+    keep_extension: bool = True
 
 
 class ExecutionResult(BaseModel):

@@ -13,12 +13,13 @@ from .config import ICON_ICO, ICON_PNG, SPLASH_PNG
 from .executor import ExecutionError, LocalExecutor
 from .hardware import detect_hardware_profile
 from .history import HistoryStore
-from .models import BatchRunRequest, SingleRunRequest, SmartRunRequest
+from .models import BatchRunRequest, RenameRunRequest, SingleRunRequest, SmartRunRequest
 from .planner import build_runtime_plan
 
 
 STRATEGY_CHOICES = ["quality", "balanced", "speed"]
 MODEL_CHOICES = [model.id for model in MODEL_CATALOG]
+RENAME_MODE_CHOICES = ["template", "replace"]
 
 
 class DesktopApp:
@@ -58,6 +59,20 @@ class DesktopApp:
         self.smart_overwrite_var = tk.BooleanVar(value=False)
         self.smart_recurse_var = tk.BooleanVar(value=False)
         self.smart_include_generated_var = tk.BooleanVar(value=False)
+
+        self.rename_input_var = tk.StringVar()
+        self.rename_mode_var = tk.StringVar(value="template")
+        self.rename_template_var = tk.StringVar(value="{index:03d}_{name}")
+        self.rename_find_var = tk.StringVar()
+        self.rename_replace_var = tk.StringVar()
+        self.rename_prefix_var = tk.StringVar()
+        self.rename_suffix_var = tk.StringVar()
+        self.rename_start_var = tk.StringVar(value="1")
+        self.rename_step_var = tk.StringVar(value="1")
+        self.rename_extensions_var = tk.StringVar(value=".png,.jpg,.jpeg,.webp")
+        self.rename_recurse_var = tk.BooleanVar(value=False)
+        self.rename_case_sensitive_var = tk.BooleanVar(value=False)
+        self.rename_keep_extension_var = tk.BooleanVar(value=True)
 
         self._apply_window_icon()
         self._build_ui()
@@ -100,18 +115,21 @@ class DesktopApp:
         self.single_tab = ttk.Frame(notebook, padding=12)
         self.batch_tab = ttk.Frame(notebook, padding=12)
         self.smart_tab = ttk.Frame(notebook, padding=12)
+        self.rename_tab = ttk.Frame(notebook, padding=12)
         self.history_tab = ttk.Frame(notebook, padding=12)
 
         notebook.add(self.dashboard_tab, text="仪表盘")
         notebook.add(self.single_tab, text="单图处理")
         notebook.add(self.batch_tab, text="固定批处理")
         notebook.add(self.smart_tab, text="智能批处理")
+        notebook.add(self.rename_tab, text="批量命名")
         notebook.add(self.history_tab, text="任务历史")
 
         self._build_dashboard_tab()
         self._build_single_tab()
         self._build_batch_tab()
         self._build_smart_tab()
+        self._build_rename_tab()
         self._build_history_tab()
 
         ttk.Label(outer, textvariable=self.status_var, anchor="w").pack(fill="x", pady=(10, 0))
@@ -174,6 +192,28 @@ class DesktopApp:
         ttk.Button(form, text="开始智能批处理", command=self._run_smart).pack(fill="x", pady=(10, 0))
         self.smart_result_text = result
 
+    def _build_rename_tab(self) -> None:
+        form, result = self._build_form_and_result(self.rename_tab)
+        self._labeled_entry(form, "输入目录", self.rename_input_var, lambda: self._pick_directory(self.rename_input_var))
+        self._labeled_combo(form, "模式", self.rename_mode_var, RENAME_MODE_CHOICES)
+        self._labeled_entry(form, "模板", self.rename_template_var)
+        self._labeled_entry(form, "查找文本", self.rename_find_var)
+        self._labeled_entry(form, "替换文本", self.rename_replace_var)
+        self._labeled_entry(form, "前缀", self.rename_prefix_var)
+        self._labeled_entry(form, "后缀", self.rename_suffix_var)
+        self._labeled_entry(form, "起始序号", self.rename_start_var)
+        self._labeled_entry(form, "步长", self.rename_step_var)
+        self._labeled_entry(form, "扩展名过滤", self.rename_extensions_var)
+        ttk.Label(
+            form,
+            text="模板变量：{index} / {index:03d} / {name} / {stem} / {parent} / {ext}",
+        ).pack(anchor="w", pady=(4, 6))
+        self._labeled_check(form, "递归子目录", self.rename_recurse_var)
+        self._labeled_check(form, "查找替换区分大小写", self.rename_case_sensitive_var)
+        self._labeled_check(form, "保留原始扩展名", self.rename_keep_extension_var)
+        ttk.Button(form, text="开始批量命名", command=self._run_rename).pack(fill="x", pady=(10, 0))
+        self.rename_result_text = result
+
     def _build_history_tab(self) -> None:
         controls = ttk.Frame(self.history_tab)
         controls.pack(fill="x", pady=(0, 8))
@@ -211,14 +251,15 @@ class DesktopApp:
         result.pack(fill="both", expand=True, pady=(8, 0))
         return form, result
 
-    def _labeled_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar, browse_command) -> None:
+    def _labeled_entry(self, parent: ttk.Frame, label: str, variable: tk.StringVar, browse_command=None) -> None:
         wrapper = ttk.Frame(parent)
         wrapper.pack(fill="x", pady=6)
         ttk.Label(wrapper, text=label).pack(anchor="w")
         row = ttk.Frame(wrapper)
         row.pack(fill="x", pady=(4, 0))
         ttk.Entry(row, textvariable=variable).pack(side="left", fill="x", expand=True)
-        ttk.Button(row, text="浏览", command=browse_command).pack(side="left", padx=(8, 0))
+        if browse_command is not None:
+            ttk.Button(row, text="浏览", command=browse_command).pack(side="left", padx=(8, 0))
 
     def _labeled_combo(self, parent: ttk.Frame, label: str, variable: tk.StringVar, values: list[str]) -> None:
         wrapper = ttk.Frame(parent)
@@ -373,6 +414,33 @@ class DesktopApp:
         )
         self._start_job("smart", request, self.smart_result_text)
 
+    def _run_rename(self) -> None:
+        if not self.rename_input_var.get():
+            messagebox.showwarning("缺少路径", "请先选择输入目录。")
+            return
+        try:
+            start_index = int(self.rename_start_var.get())
+            step = int(self.rename_step_var.get())
+        except ValueError:
+            messagebox.showwarning("参数错误", "起始序号和步长必须是整数。")
+            return
+        request = RenameRunRequest(
+            input_dir=self.rename_input_var.get(),
+            mode=self.rename_mode_var.get(),
+            template=self.rename_template_var.get(),
+            find_text=self.rename_find_var.get(),
+            replace_text=self.rename_replace_var.get(),
+            prefix=self.rename_prefix_var.get(),
+            suffix=self.rename_suffix_var.get(),
+            start_index=start_index,
+            step=step,
+            recurse=self.rename_recurse_var.get(),
+            extensions=self.rename_extensions_var.get(),
+            case_sensitive=self.rename_case_sensitive_var.get(),
+            keep_extension=self.rename_keep_extension_var.get(),
+        )
+        self._start_job("rename", request, self.rename_result_text)
+
     def _start_job(self, job_type: str, request, output_widget: ScrolledText) -> None:
         output_widget.delete("1.0", tk.END)
         output_widget.insert("1.0", f"Starting {job_type} job...\n")
@@ -384,6 +452,8 @@ class DesktopApp:
                     result = self.executor.run_single(request)
                 elif job_type == "batch":
                     result = self.executor.run_batch(request)
+                elif job_type == "rename":
+                    result = self.executor.run_rename(request)
                 else:
                     result = self.executor.run_smart(request)
                 self.queue.put(("result", (job_type, output_widget, result)))

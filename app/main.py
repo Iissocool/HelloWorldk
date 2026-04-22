@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 
 from .catalog import MODEL_CATALOG
 from .executor import ExecutionError, LocalExecutor
-from .models import BatchRunRequest, SingleRunRequest, SmartRunRequest
+from .models import BatchRunRequest, RenameRunRequest, SingleRunRequest, SmartRunRequest
 from .planner import build_runtime_plan
 from .hardware import detect_hardware_profile
 
@@ -31,6 +31,7 @@ def render_index(request: Request, **overrides) -> HTMLResponse:
         "single_result": None,
         "batch_result": None,
         "smart_result": None,
+        "rename_result": None,
         "error": None,
     }
     context.update(overrides)
@@ -149,6 +150,46 @@ def run_smart(
             )
         )
         return render_index(request, smart_result=smart_result)
+    except ExecutionError as exc:
+        return render_index(request, error=str(exc))
+
+
+@app.post("/run/rename", response_class=HTMLResponse)
+def run_rename(
+    request: Request,
+    input_dir: str = Form(...),
+    mode: str = Form("template"),
+    template: str = Form("{index:03d}_{name}"),
+    find_text: str = Form(""),
+    replace_text: str = Form(""),
+    prefix: str = Form(""),
+    suffix: str = Form(""),
+    start_index: int = Form(1),
+    step: int = Form(1),
+    recurse: bool = Form(False),
+    extensions: str = Form(""),
+    case_sensitive: bool = Form(False),
+    keep_extension: bool = Form(True),
+) -> HTMLResponse:
+    try:
+        rename_result = executor.run_rename(
+            RenameRunRequest(
+                input_dir=input_dir,
+                mode=mode,
+                template=template,
+                find_text=find_text,
+                replace_text=replace_text,
+                prefix=prefix,
+                suffix=suffix,
+                start_index=start_index,
+                step=step,
+                recurse=recurse,
+                extensions=extensions,
+                case_sensitive=case_sensitive,
+                keep_extension=keep_extension,
+            )
+        )
+        return render_index(request, rename_result=rename_result)
     except ExecutionError as exc:
         return render_index(request, error=str(exc))
 
