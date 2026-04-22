@@ -20,13 +20,16 @@ $hermesRoot = Join-Path $workspaceRoot "data\neonpilot\hermes"
 Get-Process -Name "NeonPilot" -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process -Name "CutCanvas" -ErrorAction SilentlyContinue | Stop-Process -Force
 
+if (Test-Path $appRoot) {
+  Remove-Item -Recurse -Force $appRoot
+}
 New-Item -ItemType Directory -Force -Path $appRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $docsRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $hermesRoot | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $hermesRoot "skills") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $hermesRoot "logs") | Out-Null
 
-robocopy $portableSource $appRoot /MIR /R:1 /W:1 | Out-Null
+Copy-Item -Path (Join-Path $portableSource "*") -Destination $appRoot -Recurse -Force
 New-Item -ItemType Directory -Force -Path $installerRoot | Out-Null
 if (Test-Path $installerSource) {
   Copy-Item -Path $installerSource -Destination (Join-Path $installerRoot "NeonPilot-Setup.exe") -Force
