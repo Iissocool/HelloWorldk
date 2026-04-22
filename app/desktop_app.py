@@ -17,7 +17,7 @@ except Exception:
 from .ai_image import load_ai_settings, mask_api_key, save_ai_settings
 from .app_settings import load_app_settings, save_app_settings
 from .catalog import MODEL_CATALOG
-from .config import APP_NAME, APP_TAGLINE, BACKGROUND_GIF, HERMES_DATA_ROOT, ICON_ICO, ICON_PNG, SPLASH_GIF, SPLASH_PNG, migrate_legacy_data
+from .config import APP_NAME, APP_TAGLINE, BACKGROUND_GIF, BACKGROUND_PNG, HERMES_DATA_ROOT, ICON_ICO, ICON_PNG, SPLASH_GIF, SPLASH_PNG, migrate_legacy_data
 from .executor import ExecutionError, LocalExecutor, ModelMissingError, RuntimeMissingError
 from .hardware import detect_hardware_profile
 from .hermes_adapter import (
@@ -122,9 +122,9 @@ class DesktopApp:
         self._responsive_panes: list[tuple[ttk.Panedwindow, float, int, int]] = []
         self._resize_refresh_job: str | None = None
 
-        self.hardware = detect_hardware_profile()
-        self.plan = build_runtime_plan()
-        self.backend_choices = self.executor.available_backends()
+        self.hardware = None
+        self.plan = None
+        self.backend_choices = ["auto"]
 
         self.single_input_var = tk.StringVar()
         self.single_output_var = tk.StringVar()
@@ -187,7 +187,7 @@ class DesktopApp:
         self.agent_provider_base_url_var = tk.StringVar()
         self.agent_provider_base_env_var = tk.StringVar(value="-")
         self.agent_session_name_var = tk.StringVar(value=self.app_settings.agent_session_name or "neonpilot")
-        self.background_path_var = tk.StringVar(value="背景：内置赛博朋克动态场景")
+        self.background_path_var = tk.StringVar(value="背景：轻量静态赛博科技场景")
 
         self.resource_status_var = tk.StringVar(value="资源中心待检查")
         self.resource_runtime_busy = False
@@ -197,16 +197,13 @@ class DesktopApp:
         self._apply_window_icon()
         self._build_ui()
         self.agent_model_provider_var.trace_add("write", self._on_agent_provider_change)
-        self.root.after(220, self._refresh_background_animation)
-        self._refresh_dashboard()
-        self._refresh_history()
+        self.root.after(120, self._refresh_background_animation)
         self._load_agent_model_settings()
         self._load_agent_provider_settings()
-        self._refresh_resource_status()
-        self._refresh_agent_status(silent=True)
+        self._populate_dashboard_placeholders()
+        self.root.after(80, self._bootstrap_after_show)
         self.root.bind("<Configure>", self._on_root_resize, add="+")
         self.root.after(60, self._apply_window_material)
-        self.root.after(260, self._apply_glass_effects)
         self.root.after(150, self._poll_queue)
 
     def _apply_theme(self) -> None:
@@ -346,25 +343,21 @@ class DesktopApp:
         if pywinstyles is None or os.name != "nt":
             return
         try:
-            pywinstyles.apply_style(self.root, "acrylic")
+            pywinstyles.apply_style(self.root, "mica")
             pywinstyles.change_header_color(self.root, color="#06101f")
             pywinstyles.change_title_color(self.root, color="#f4fbff")
             pywinstyles.change_border_color(self.root, color=BORDER_BLUE)
         except Exception:
-            pass
+            try:
+                pywinstyles.apply_style(self.root, "dark")
+            except Exception:
+                pass
 
     def _register_glass(self, widget: tk.Widget, opacity: float = GLASS_CARD_OPACITY) -> tk.Widget:
-        self._glass_widgets.append((widget, opacity))
         return widget
 
     def _apply_glass_effects(self) -> None:
-        if pywinstyles is None or os.name != "nt":
-            return
-        for widget, opacity in self._glass_widgets:
-            try:
-                pywinstyles.set_opacity(widget, value=opacity)
-            except Exception:
-                continue
+        return
 
     def _register_responsive_pane(
         self,
@@ -404,7 +397,39 @@ class DesktopApp:
         for pane, _, _, _ in self._responsive_panes:
             self._reflow_responsive_pane(pane)
         self._refresh_background_animation()
-        self.root.after(120, self._apply_glass_effects)
+
+    def _populate_dashboard_placeholders(self) -> None:
+        if hasattr(self, "hardware_text"):
+            self.hardware_text.delete("1.0", tk.END)
+            self.hardware_text.insert("1.0", "正在检测硬件与运行能力...")
+        if hasattr(self, "plan_text"):
+            self.plan_text.delete("1.0", tk.END)
+            self.plan_text.insert("1.0", "正在计算推荐后端栈...")
+        if hasattr(self, "agent_summary_text"):
+            self.agent_summary_text.delete("1.0", tk.END)
+            self.agent_summary_text.insert("1.0", "正在检查 Agent 环境...")
+        if hasattr(self, "model_tree"):
+            for item in self.model_tree.get_children():
+                self.model_tree.delete(item)
+            for model in MODEL_CATALOG:
+                self.model_tree.insert("", "end", values=(model.id, model.category, model.quality_tier, model.speed_tier))
+        self.resource_status_var.set("正在检查资源状态...")
+        self.status_var.set("正在准备工作台...")
+
+    def _bootstrap_after_show(self) -> None:
+        self._refresh_history()
+        self._refresh_resource_status()
+        self.root.after(120, lambda: self._refresh_agent_status(silent=True))
+
+        def worker() -> None:
+            try:
+                hardware = detect_hardware_profile()
+                plan = build_runtime_plan()
+                self.queue.put(("hardware_snapshot", (hardware, plan, False)))
+            except Exception as exc:
+                self.queue.put(("agent_error", ("初始化硬件", exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _apply_window_icon(self) -> None:
         if ICON_PNG.exists():
@@ -1006,7 +1031,7 @@ class DesktopApp:
             variable.set(path)
 
     def _refresh_background_animation(self) -> None:
-        path = BACKGROUND_GIF if BACKGROUND_GIF.exists() else None
+        path = BACKGROUND_PNG if BACKGROUND_PNG.exists() else (BACKGROUND_GIF if BACKGROUND_GIF.exists() else None)
         self._stop_background_animation()
         self._background_frames = []
         self._background_durations = []
@@ -1015,24 +1040,15 @@ class DesktopApp:
             return
         try:
             source = Image.open(path)
-            frames = []
-            durations = []
             width = max(self.root.winfo_width(), 1440)
             height = max(self.root.winfo_height(), 920)
-            for frame in ImageSequence.Iterator(source):
-                image = self._cover_resize(frame.convert("RGBA"), (width, height))
-                overlay = Image.new("RGBA", image.size, (4, 16, 34, 58))
-                image = Image.alpha_composite(image, overlay)
-                frames.append(ImageTk.PhotoImage(image))
-                durations.append(max(int(frame.info.get("duration", BACKGROUND_FRAME_MS)), 48))
-            if not frames:
-                frames.append(ImageTk.PhotoImage(self._cover_resize(source.convert("RGBA"), (width, height))))
-                durations.append(BACKGROUND_FRAME_MS)
-            self._background_frames = frames
-            self._background_durations = durations
+            image = self._cover_resize(source.convert("RGBA"), (width, height))
+            overlay = Image.new("RGBA", image.size, (4, 10, 22, 42))
+            image = Image.alpha_composite(image, overlay)
+            self._background_frames = [ImageTk.PhotoImage(image)]
+            self._background_durations = []
             self._background_index = 0
             self._apply_background_frame(0)
-            self._animate_background()
         except Exception:
             self.background_label.configure(image="", bg=ROOT_BG)
 
@@ -1184,15 +1200,28 @@ class DesktopApp:
         self.resource_status_var.set("资源状态已刷新")
 
     def _refresh_hardware(self) -> None:
-        self.hardware = detect_hardware_profile()
-        self.plan = build_runtime_plan()
-        self.backend_choices = self.executor.available_backends()
-        self._refresh_dashboard()
-        self._refresh_resource_status()
-        self._refresh_agent_status(silent=True)
-        self.status_var.set("硬件信息已刷新")
+        self.status_var.set("正在刷新硬件信息...")
+        if hasattr(self, "hardware_text"):
+            self.hardware_text.delete("1.0", tk.END)
+            self.hardware_text.insert("1.0", "正在刷新硬件信息...")
+        if hasattr(self, "plan_text"):
+            self.plan_text.delete("1.0", tk.END)
+            self.plan_text.insert("1.0", "正在刷新推荐后端栈...")
+
+        def worker() -> None:
+            try:
+                hardware = detect_hardware_profile()
+                plan = build_runtime_plan()
+                self.queue.put(("hardware_snapshot", (hardware, plan, True)))
+            except Exception as exc:
+                self.queue.put(("agent_error", ("刷新硬件", exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _refresh_dashboard(self) -> None:
+        if self.hardware is None or self.plan is None:
+            self._populate_dashboard_placeholders()
+            return
         self.hardware_text.delete("1.0", tk.END)
         lines = [f"系统: {self.hardware.os} / {self.hardware.os_version}", f"CPU: {self.hardware.cpu_name}", f"内存: {self.hardware.total_memory_gb} GB", "", "GPU 列表:"]
         for gpu in self.hardware.gpus:
@@ -1705,6 +1734,15 @@ class DesktopApp:
                         self._prompt_install_model(exc.model_id, str(exc))
                     elif isinstance(exc, ExecutionError):
                         messagebox.showerror("执行失败", str(exc))
+                elif kind == "hardware_snapshot":
+                    hardware, plan, from_refresh = payload
+                    self.hardware = hardware
+                    self.plan = plan
+                    self.backend_choices = self.executor.available_backends()
+                    self._refresh_dashboard()
+                    self._refresh_resource_status()
+                    self._refresh_agent_status(silent=True)
+                    self.status_var.set("硬件信息已刷新" if from_refresh else "工作台已就绪")
                 elif kind == "agent_result":
                     command, ok, stdout, stderr = payload
                     self.agent_result_text.delete("1.0", tk.END)
@@ -1824,15 +1862,16 @@ def close_splash(root: tk.Tk, splash: tk.Toplevel | None) -> None:
 def main() -> None:
     root = tk.Tk()
     splash = show_splash(root)
+    splash_boot_delay_ms = 1600 if splash is not None else 0
 
     def _boot() -> None:
         root._desktop_app = DesktopApp(root)
         if splash is not None:
-            root.after(450, lambda: close_splash(root, splash))
+            root.after(120, lambda: close_splash(root, splash))
         else:
             close_splash(root, splash)
 
-    root.after(90, _boot)
+    root.after(splash_boot_delay_ms, _boot)
     root.mainloop()
 
 

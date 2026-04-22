@@ -78,6 +78,7 @@ ICON_ICO = BRANDING_ROOT / "neonpilot.ico"
 LOGO_PNG = BRANDING_ROOT / "neonpilot-logo.png"
 SPLASH_PNG = BRANDING_ROOT / "neonpilot-splash.png"
 SPLASH_GIF = BRANDING_ROOT / "neonpilot-splash.gif"
+BACKGROUND_PNG = BRANDING_ROOT / "neonpilot-bg.png"
 BACKGROUND_GIF = BRANDING_ROOT / "neonpilot-bg.gif"
 VENV_ROOT = WORKSPACE_ROOT / "venvs"
 
