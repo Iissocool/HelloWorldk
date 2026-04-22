@@ -1,8 +1,8 @@
 ﻿{
-  "repoRoot": "C:\\path\\to\\CutCanvas",
-  "inputDir": "C:\\path\\to\\CutCanvas\\input",
-  "outputDir": "C:\\path\\to\\CutCanvas\\api-batch-workflow\\output",
-  "maskConfigPath": "C:\\path\\to\\CutCanvas\\api-batch-workflow\\product_masks.json",
+  "repoRoot": "C:\\path\\to\\NeonPilot",
+  "inputDir": "C:\\path\\to\\NeonPilot\\input",
+  "outputDir": "C:\\path\\to\\NeonPilot\\api-batch-workflow\\output",
+  "maskConfigPath": "C:\\path\\to\\NeonPilot\\api-batch-workflow\\product_masks.json",
   "prompt": "Replace only the background and all descriptive marketing text outside the tablet case. Use a clean premium ecommerce lifestyle backdrop with subtle tablet-accessory scene accents. No logos, no added text, no watermark.",
   "model": "gpt-image-1",
   "workers": 2,

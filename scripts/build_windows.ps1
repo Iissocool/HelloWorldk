@@ -19,7 +19,7 @@ try {
 
   & $python -m pip install --upgrade pip | Out-Host
   & $python -m pip install pyinstaller | Out-Host
-  & $python -m PyInstaller --noconfirm .\CutCanvas.spec | Out-Host
+  & $python -m PyInstaller --noconfirm .\NeonPilot.spec | Out-Host
 
   $iscc = $null
   $commandIscc = Get-Command iscc -ErrorAction SilentlyContinue
@@ -35,15 +35,15 @@ try {
 
   if (-not $SkipInstaller) {
     if (-not $iscc) {
-      Write-Warning "Inno Setup not found. Portable build is ready at .\dist\CutCanvas"
+      Write-Warning "Inno Setup not found. Portable build is ready at .\dist\NeonPilot"
     } else {
-      & $iscc .\packaging\CutCanvas.iss | Out-Host
+      & $iscc .\packaging\NeonPilot.iss | Out-Host
     }
   }
 
   Write-Host "Build complete."
-  Write-Host "Portable app: $root\dist\CutCanvas\CutCanvas.exe"
-  Write-Host "Installer: $root\dist\installer\CutCanvas-Setup.exe"
+  Write-Host "Portable app: $root\dist\NeonPilot\NeonPilot.exe"
+  Write-Host "Installer: $root\dist\installer\NeonPilot-Setup.exe"
 }
 finally {
   Pop-Location

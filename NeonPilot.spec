@@ -1,7 +1,6 @@
-﻿# -*- mode: python ; coding: utf-8 -*-
+# -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
-
 
 project_root = Path.cwd()
 datas = [
@@ -15,9 +14,8 @@ datas = [
     (str(project_root / "requirements-app.txt"), "."),
 ]
 
-
 a = Analysis(
-    ["cutcanvas_desktop.py"],
+    ["neonpilot_desktop.py"],
     pathex=[str(project_root)],
     binaries=[],
     datas=datas,
@@ -36,7 +34,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="CutCanvas",
+    name="NeonPilot",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -47,7 +45,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(project_root / "assets" / "branding" / "cutcanvas.ico"),
+    icon=str(project_root / "assets" / "branding" / "neonpilot.ico"),
 )
 
 coll = COLLECT(
@@ -57,5 +55,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="CutCanvas",
+    name="NeonPilot",
 )

@@ -1,4 +1,4 @@
-from neonpilot_desktop import main
+from app.desktop_app import main
 
 
 if __name__ == "__main__":

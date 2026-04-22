@@ -8,7 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .catalog import MODEL_CATALOG
+from .config import APP_NAME, APP_VERSION
 from .executor import ExecutionError, LocalExecutor
+from .hermes_adapter import inspect_hermes_environment
 from .models import (
     AIImageRunRequest,
     AIImageTestRequest,
@@ -22,7 +24,7 @@ from .hardware import detect_hardware_profile
 
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="CutCanvas Console", version="0.2.2")
+app = FastAPI(title=f"{APP_NAME} Console", version=APP_VERSION)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 executor = LocalExecutor()
@@ -40,6 +42,7 @@ def render_index(request: Request, **overrides) -> HTMLResponse:
         "smart_result": None,
         "rename_result": None,
         "ai_result": None,
+        "agent_status": inspect_hermes_environment().summary,
         "error": None,
     }
     context.update(overrides)
@@ -216,6 +219,19 @@ def ai_test(payload: AIImageTestRequest) -> dict:
 def ai_generate(payload: AIImageRunRequest) -> dict:
     result = executor.run_ai_image(payload)
     return result.model_dump()
+
+
+@app.get("/api/hermes/status")
+def hermes_status() -> dict:
+    status = inspect_hermes_environment()
+    return {
+        "summary": status.summary,
+        "selected_distro": status.selected_distro,
+        "usable_distros": status.usable_distros,
+        "hermes_available": status.hermes_available,
+        "hermes_version": status.hermes_version,
+        "notes": status.notes,
+    }
 
 
 @app.get("/refresh")

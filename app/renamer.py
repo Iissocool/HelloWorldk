@@ -210,7 +210,7 @@ def execute_rename_plan(plan: Iterable[RenamePlanItem]) -> tuple[list[RenamePlan
     try:
         for item in actionable_items:
             temp_path = item.source_path.with_name(
-                f".cutcanvas_rename_{uuid4().hex}{item.source_path.suffix}"
+                f".neonpilot_rename_{uuid4().hex}{item.source_path.suffix}"
             )
             item.source_path.rename(temp_path)
             staged.append((temp_path, item.source_path, item.target_path))

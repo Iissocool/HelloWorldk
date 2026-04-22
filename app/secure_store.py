@@ -6,7 +6,7 @@ from ctypes import wintypes
 
 
 CRYPTPROTECT_UI_FORBIDDEN = 0x01
-LOCAL_ENTROPY = b"CutCanvas-AI-Settings-v1"
+LOCAL_ENTROPY = b"NeonPilot-AI-Settings-v1"
 
 
 class DATA_BLOB(ctypes.Structure):
@@ -40,7 +40,7 @@ def encrypt_text(value: str) -> str:
     out_blob = DATA_BLOB()
     if not crypt32.CryptProtectData(
         ctypes.byref(in_blob),
-        "CutCanvas AI Key",
+        "NeonPilot AI Key",
         ctypes.byref(entropy_blob),
         None,
         None,

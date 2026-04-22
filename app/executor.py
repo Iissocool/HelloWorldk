@@ -538,12 +538,12 @@ class LocalExecutor:
             )
         return result
 
-    def run_ai_test(self, request: AIImageTestRequest) -> ExecutionResult:
+    def run_ai_test(self, request: AIImageTestRequest, *, log_history: bool = True) -> ExecutionResult:
         try:
             summary, preview_models = test_ai_provider(request)
         except Exception as exc:
             raise ExecutionError(str(exc)) from exc
-        return ExecutionResult(
+        result = ExecutionResult(
             ok=True,
             command=["internal:ai-test"],
             stdout=summary,
@@ -553,6 +553,16 @@ class LocalExecutor:
             model_used=preview_models[0] if preview_models else None,
             summary="AI 接口连接正常。",
         )
+        if log_history:
+            self._log_job(
+                job_type="ai_test",
+                backend="openai-compatible",
+                model=preview_models[0] if preview_models else "provider-test",
+                input_ref=request.base_url,
+                output_ref="connection-test",
+                result=result,
+            )
+        return result
 
     def run_ai_image(self, request: AIImageRunRequest, *, log_history: bool = True) -> ExecutionResult:
         if not request.prompt.strip():

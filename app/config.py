@@ -1,9 +1,17 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
+
+APP_NAME = "NeonPilot"
+APP_SLUG = "neonpilot"
+APP_VERSION = "0.4.0"
+APP_TAGLINE = "Cyberpunk AI imaging cockpit"
+LEGACY_APP_NAME = "CutCanvas"
+LEGACY_APP_SLUG = "cutcanvas"
 
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
@@ -42,18 +50,13 @@ RUNTIME_ROOT = Path(
         _workspace_or_bundle(WORKSPACE_ROOT / "runtime" / "rembg", BUNDLE_ROOT / "runtime" / "rembg"),
     )
 )
-MODELS_ROOT = Path(
-    os.environ.get("REMBG_MODELS_ROOT", WORKSPACE_ROOT / "models" / ".u2net")
-)
-DATA_ROOT = Path(
-    os.environ.get(
-        "BACKGROUND_APP_DATA_DIR", WORKSPACE_ROOT / "data" / "background-desktop"
-    )
-)
+MODELS_ROOT = Path(os.environ.get("REMBG_MODELS_ROOT", WORKSPACE_ROOT / "models" / ".u2net"))
+LEGACY_DATA_ROOT = WORKSPACE_ROOT / "data" / "background-desktop"
+DATA_ROOT = Path(os.environ.get("BACKGROUND_APP_DATA_DIR", WORKSPACE_ROOT / "data" / APP_SLUG))
 AI_SETTINGS_PATH = DATA_ROOT / "ai_provider.json"
-REPORTS_ROOT = Path(
-    os.environ.get("BACKGROUND_APP_REPORTS_DIR", WORKSPACE_ROOT / "reports")
-)
+APP_SETTINGS_PATH = DATA_ROOT / "app_settings.json"
+HERMES_EXPORT_ROOT = DATA_ROOT / "hermes"
+REPORTS_ROOT = Path(os.environ.get("BACKGROUND_APP_REPORTS_DIR", WORKSPACE_ROOT / "reports"))
 DOCS_ROOT = Path(
     os.environ.get(
         "BACKGROUND_APP_DOCS_DIR",
@@ -64,12 +67,28 @@ REMBG_SOURCE_ROOT = Path(os.environ.get("REMBG_SOURCE_DIR", WORKSPACE_ROOT / "re
 PATCH_ROOT = _workspace_or_bundle(WORKSPACE_ROOT / "patches", BUNDLE_ROOT / "patches")
 ASSETS_ROOT = Path(
     os.environ.get(
-        "CUTCANVAS_ASSETS_DIR",
+        "NEONPILOT_ASSETS_DIR",
         _workspace_or_bundle(WORKSPACE_ROOT / "assets", BUNDLE_ROOT / "assets"),
     )
 )
 BRANDING_ROOT = ASSETS_ROOT / "branding"
-ICON_PNG = BRANDING_ROOT / "cutcanvas-icon.png"
-ICON_ICO = BRANDING_ROOT / "cutcanvas.ico"
-LOGO_PNG = BRANDING_ROOT / "cutcanvas-logo.png"
-SPLASH_PNG = BRANDING_ROOT / "cutcanvas-splash.png"
+ICON_PNG = BRANDING_ROOT / "neonpilot-icon.png"
+ICON_ICO = BRANDING_ROOT / "neonpilot.ico"
+LOGO_PNG = BRANDING_ROOT / "neonpilot-logo.png"
+SPLASH_PNG = BRANDING_ROOT / "neonpilot-splash.png"
+BACKGROUND_GIF = BRANDING_ROOT / "neonpilot-bg.gif"
+
+
+def migrate_legacy_data() -> None:
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    if not LEGACY_DATA_ROOT.exists() or LEGACY_DATA_ROOT == DATA_ROOT:
+        return
+
+    migrations = [
+        (LEGACY_DATA_ROOT / "ai_provider.json", AI_SETTINGS_PATH),
+        (LEGACY_DATA_ROOT / "history.sqlite3", DATA_ROOT / "history.sqlite3"),
+    ]
+    for source, target in migrations:
+        if source.exists() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)

@@ -3,18 +3,23 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CutCanvas Console</title>
+  <title>NeonPilot Console</title>
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
   <main class="page">
     <section class="hero">
       <div>
-        <p class="eyebrow">CutCanvas Console</p>
+        <p class="eyebrow">NeonPilot Console</p>
         <h1>本地抠图桌面引擎控制台</h1>
-        <p class="lead">这是一个以个人使用为主、由纯 AI 辅助制作开发并使用 GPT-5.4 持续迭代的本地抠图项目。Web 页面现在更多是一个辅助控制台，核心使用入口会是桌面窗口，项目也仍在持续更新中。</p>
+        <p class="lead">这是一个以个人使用为主、由纯 AI 辅助制作开发并使用 GPT-5.4 持续迭代的本地图像工作台。Web 页面现在更多是一个辅助控制台，核心使用入口仍然是桌面窗口。</p>
       </div>
       <a class="ghost-button" href="/refresh">刷新硬件信息</a>
+    </section>
+
+    <section class="card">
+      <h2>Agent 状态</h2>
+      <p>{{ agent_status }}</p>
     </section>
 
     {% if error %}

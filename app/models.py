@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Literal
@@ -14,13 +14,14 @@ LicenseClass = Literal[
 BackendId = Literal[
     "auto",
     "directml",
+    "amd",
     "openvino",
     "cuda",
     "tensorrt",
     "migraphx",
     "cpu",
 ]
-JobType = Literal["single", "batch", "smart", "rename", "image"]
+JobType = Literal["single", "batch", "smart", "rename", "image", "ai_test", "agent", "cli"]
 RenameMode = Literal["template", "replace", "fresh"]
 
 
@@ -141,6 +142,12 @@ class AIImageRunRequest(BaseModel):
     quality: str = "auto"
     file_prefix: str = "image_"
     timeout_sec: int = 180
+
+
+class AppSettings(BaseModel):
+    background_gif_path: str = ""
+    show_guide_on_start: bool = True
+    preferred_hermes_distro: str = ""
 
 
 class ExecutionResult(BaseModel):
