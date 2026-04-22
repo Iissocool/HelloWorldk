@@ -5,37 +5,45 @@ import threading
 import tkinter as tk
 from pathlib import Path
 from queue import Empty, Queue
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from PIL import Image, ImageSequence, ImageTk
 
 from .ai_image import load_ai_settings, mask_api_key, save_ai_settings
-from .app_settings import load_app_settings, resolve_background_gif, save_app_settings
+from .app_settings import load_app_settings, save_app_settings
 from .catalog import MODEL_CATALOG
-from .config import APP_NAME, APP_TAGLINE, HERMES_DATA_ROOT, ICON_ICO, ICON_PNG, SPLASH_PNG, migrate_legacy_data
-from .executor import ExecutionError, LocalExecutor
+from .config import APP_NAME, APP_TAGLINE, BACKGROUND_GIF, HERMES_DATA_ROOT, ICON_ICO, ICON_PNG, SPLASH_GIF, SPLASH_PNG, migrate_legacy_data
+from .executor import ExecutionError, LocalExecutor, ModelMissingError, RuntimeMissingError
 from .hardware import detect_hardware_profile
 from .hermes_adapter import (
     HermesModelSettings,
     HermesProviderSettings,
+    auxiliary_provider_status,
     load_hermes_model_settings,
+    load_auxiliary_provider_key,
     load_hermes_provider_settings,
-    export_hermes_skill,
     inspect_hermes_environment,
     is_chat_query_supported,
     read_hermes_logs,
-    run_hermes_command,
     run_hermes_query,
+    save_auxiliary_provider_key,
     save_hermes_model_settings,
     save_hermes_provider_settings,
     start_docker_desktop,
     start_hermes_service,
-    stop_hermes_service,
+    test_openai_compatible_provider,
 )
 from .history import HistoryStore
 from .models import AIImageRunRequest, AIImageTestRequest, AIProviderSettings, BatchRunRequest, RenameRunRequest, SingleRunRequest, SmartRunRequest
 from .planner import build_runtime_plan
+from .runtime_manager import (
+    build_model_manage_command,
+    build_runtime_manage_command,
+    choose_model_install_backend,
+    model_statuses,
+    runtime_component_statuses,
+)
 
 
 STRATEGY_CHOICES = ["quality", "balanced", "speed"]
@@ -61,7 +69,7 @@ HERMES_PROVIDER_CHOICES = [
     "nvidia",
 ]
 BACKGROUND_SIZE = (1600, 900)
-BACKGROUND_FRAME_MS = 120
+BACKGROUND_FRAME_MS = 100
 
 
 class DesktopApp:
@@ -71,7 +79,7 @@ class DesktopApp:
         self.root.title(APP_NAME)
         self.root.geometry("1440x920")
         self.root.minsize(980, 640)
-        self.root.configure(bg="#050814")
+        self.root.configure(bg="#04050a")
 
         self.history_store = HistoryStore()
         self.executor = LocalExecutor(self.history_store)
@@ -84,7 +92,6 @@ class DesktopApp:
         self._background_frames: list[ImageTk.PhotoImage] = []
         self._background_index = 0
         self._background_job: str | None = None
-        self._guide_window: tk.Toplevel | None = None
 
         self.hardware = detect_hardware_profile()
         self.plan = build_runtime_plan()
@@ -142,8 +149,6 @@ class DesktopApp:
         self.agent_docker_state_var = tk.StringVar(value="未检测")
         self.agent_hermes_state_var = tk.StringVar(value="未检测")
         self.agent_chat_state_var = tk.StringVar(value="未检测")
-        self.agent_command_var = tk.StringVar(value=self.app_settings.hermes_command or "hermes --help")
-        self.agent_skill_path_var = tk.StringVar(value="")
         self.agent_data_root_var = tk.StringVar(value=str(HERMES_DATA_ROOT))
         self.agent_model_default_var = tk.StringVar()
         self.agent_model_provider_var = tk.StringVar(value="auto")
@@ -152,9 +157,12 @@ class DesktopApp:
         self.agent_api_env_var = tk.StringVar(value="-")
         self.agent_provider_base_url_var = tk.StringVar()
         self.agent_provider_base_env_var = tk.StringVar(value="-")
-        self.agent_session_name_var = tk.StringVar(value="neonpilot")
-        current_bg = self.app_settings.background_gif_path or "默认赛博朋克背景"
-        self.background_path_var = tk.StringVar(value=f"当前背景动图：{current_bg}")
+        self.agent_session_name_var = tk.StringVar(value=self.app_settings.agent_session_name or "neonpilot")
+        self.background_path_var = tk.StringVar(value="背景：内置赛博朋克动态场景")
+
+        self.resource_status_var = tk.StringVar(value="资源中心待检查")
+        self.resource_runtime_busy = False
+        self.resource_model_busy = False
 
         self._apply_theme()
         self._apply_window_icon()
@@ -165,9 +173,9 @@ class DesktopApp:
         self._refresh_history()
         self._load_agent_model_settings()
         self._load_agent_provider_settings()
+        self._refresh_resource_status()
         self._refresh_agent_status(silent=True)
         self.root.after(150, self._poll_queue)
-        self.root.after(500, self._maybe_show_guide)
 
     def _apply_theme(self) -> None:
         style = ttk.Style()
@@ -176,25 +184,26 @@ class DesktopApp:
         except tk.TclError:
             pass
 
-        style.configure("TFrame", background="#0c1222")
-        style.configure("Shell.TFrame", background="#07101d")
-        style.configure("Card.TFrame", background="#0f172b", relief="flat")
-        style.configure("Header.TFrame", background="#07101d")
-        style.configure("TLabel", background="#0c1222", foreground="#d6f3ff", font=("Segoe UI", 10))
-        style.configure("Header.TLabel", background="#07101d", foreground="#f7fbff", font=("Segoe UI Semibold", 24))
-        style.configure("Subtle.TLabel", background="#0c1222", foreground="#89a9c7")
-        style.configure("CardTitle.TLabel", background="#0f172b", foreground="#7cecff", font=("Segoe UI Semibold", 12))
-        style.configure("TButton", background="#12243a", foreground="#dffaff", borderwidth=0, padding=8)
-        style.map("TButton", background=[("active", "#163552")])
-        style.configure("Accent.TButton", background="#0bc5ea", foreground="#021018")
-        style.map("Accent.TButton", background=[("active", "#4fe6ff")], foreground=[("active", "#021018")])
-        style.configure("TCheckbutton", background="#0c1222", foreground="#d6f3ff")
-        style.configure("TNotebook", background="#07101d", borderwidth=0)
-        style.configure("TNotebook.Tab", background="#0f172b", foreground="#89a9c7", padding=(16, 8))
-        style.map("TNotebook.Tab", background=[("selected", "#13233a")], foreground=[("selected", "#f7fbff")])
-        style.configure("Treeview", background="#0b1422", fieldbackground="#0b1422", foreground="#d6f3ff", rowheight=28)
-        style.configure("Treeview.Heading", background="#13233a", foreground="#7cecff", relief="flat")
-        style.map("Treeview", background=[("selected", "#12436b")], foreground=[("selected", "#ffffff")])
+        style.configure("TFrame", background="#06070d")
+        style.configure("Shell.TFrame", background="#04050a")
+        style.configure("Card.TFrame", background="#0d1018", relief="flat")
+        style.configure("Header.TFrame", background="#04050a")
+        style.configure("TLabel", background="#06070d", foreground="#eaf6ff", font=("Segoe UI", 10))
+        style.configure("Header.TLabel", background="#04050a", foreground="#f9f871", font=("Segoe UI Semibold", 24))
+        style.configure("Subtle.TLabel", background="#06070d", foreground="#9bb4d8")
+        style.configure("CardTitle.TLabel", background="#0d1018", foreground="#00f6ff", font=("Segoe UI Semibold", 12))
+        style.configure("TButton", background="#171b29", foreground="#f3fbff", borderwidth=0, padding=8)
+        style.map("TButton", background=[("active", "#20263b")])
+        style.configure("Accent.TButton", background="#f9f871", foreground="#05070d")
+        style.map("Accent.TButton", background=[("active", "#fff58f")], foreground=[("active", "#05070d")])
+        style.configure("TCheckbutton", background="#06070d", foreground="#dff9ff")
+        style.configure("TNotebook", background="#04050a", borderwidth=0)
+        style.configure("TNotebook.Tab", background="#101420", foreground="#9bb4d8", padding=(16, 8))
+        style.map("TNotebook.Tab", background=[("selected", "#1b2030")], foreground=[("selected", "#f9f871")])
+        style.configure("Treeview", background="#090d16", fieldbackground="#090d16", foreground="#eaf6ff", rowheight=30)
+        style.configure("Treeview.Heading", background="#13192a", foreground="#00f6ff", relief="flat")
+        style.map("Treeview", background=[("selected", "#2b0a25")], foreground=[("selected", "#f9f871")])
+        style.configure("Horizontal.TProgressbar", troughcolor="#101420", background="#f9f871", bordercolor="#101420", lightcolor="#f9f871", darkcolor="#f9f871")
 
     def _apply_window_icon(self) -> None:
         if ICON_PNG.exists():
@@ -210,7 +219,7 @@ class DesktopApp:
                 pass
 
     def _build_ui(self) -> None:
-        self.background_label = tk.Label(self.root, bd=0, highlightthickness=0, bg="#050814")
+        self.background_label = tk.Label(self.root, bd=0, highlightthickness=0, bg="#04050a")
         self.background_label.place(relx=0, rely=0, relwidth=1, relheight=1)
 
         self.outer = ttk.Frame(self.root, style="Shell.TFrame", padding=14)
@@ -226,15 +235,12 @@ class DesktopApp:
 
         action_block = ttk.Frame(header, style="Header.TFrame")
         action_block.pack(side="right")
-        ttk.Button(action_block, text="导向", command=self._show_guide_window).pack(side="left", padx=(0, 8))
-        ttk.Button(action_block, text="更换动图背景", command=self._choose_background_gif).pack(side="left", padx=(0, 8))
-        ttk.Button(action_block, text="恢复默认背景", command=self._reset_background_gif).pack(side="left", padx=(0, 8))
         ttk.Button(action_block, text="刷新硬件", command=self._refresh_hardware, style="Accent.TButton").pack(side="left")
 
         hero_card = ttk.Frame(self.outer, style="Card.TFrame", padding=14)
         hero_card.pack(fill="x", pady=(0, 12))
-        ttk.Label(hero_card, text="升级说明", style="CardTitle.TLabel").pack(anchor="w")
-        ttk.Label(hero_card, text="程序已升级为图像工作台 + Agent 控制台，支持内置 CLI、Hermes Skill 导出、动态背景和可滚动表单。", style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(8, 0))
+        ttk.Label(hero_card, text="当前工作方式", style="CardTitle.TLabel").pack(anchor="w")
+        ttk.Label(hero_card, text="桌面程序现在默认走固定赛博朋克背景、聊天式 Agent、最小依赖先启动，以及按需安装运行时与模型。", style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(8, 0))
         ttk.Label(hero_card, textvariable=self.background_path_var, style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(8, 0))
 
         self.notebook = ttk.Notebook(self.outer)
@@ -246,6 +252,7 @@ class DesktopApp:
         self.smart_tab = ttk.Frame(self.notebook, padding=12)
         self.rename_tab = ttk.Frame(self.notebook, padding=12)
         self.ai_tab = ttk.Frame(self.notebook, padding=12)
+        self.resource_tab = ttk.Frame(self.notebook, padding=12)
         self.agent_tab = ttk.Frame(self.notebook, padding=12)
         self.history_tab = ttk.Frame(self.notebook, padding=12)
 
@@ -255,6 +262,7 @@ class DesktopApp:
         self.notebook.add(self.smart_tab, text="智能批处理")
         self.notebook.add(self.rename_tab, text="批量命名")
         self.notebook.add(self.ai_tab, text="AI 生图")
+        self.notebook.add(self.resource_tab, text="资源中心")
         self.notebook.add(self.agent_tab, text="Agent")
         self.notebook.add(self.history_tab, text="任务历史")
 
@@ -264,6 +272,7 @@ class DesktopApp:
         self._build_smart_tab()
         self._build_rename_tab()
         self._build_ai_tab()
+        self._build_resource_tab()
         self._build_agent_tab()
         self._build_history_tab()
 
@@ -373,15 +382,15 @@ class DesktopApp:
         frame.add(right, weight=3)
 
         self._hint_label(form, "AI 生图：接入 OpenAI 兼容接口，配置会加密保存在当前 Windows 用户空间。")
-        self._labeled_entry(form, "服务地址", self.ai_base_url_var)
-        self._labeled_secret_entry(form, "API Key", self.ai_api_key_var)
-        self._labeled_entry(form, "模型", self.ai_model_var)
-        self._labeled_entry(form, "超时秒数", self.ai_timeout_var)
+        self._labeled_entry(form, "服务地址", self.ai_base_url_var, stretch=False, width=56)
+        self._labeled_secret_entry(form, "API Key", self.ai_api_key_var, stretch=False, width=56)
+        self._labeled_entry(form, "模型", self.ai_model_var, stretch=False, width=44)
+        self._labeled_entry(form, "超时秒数", self.ai_timeout_var, stretch=False, width=12)
         self._labeled_entry(form, "输出目录", self.ai_output_dir_var, lambda: self._pick_directory(self.ai_output_dir_var))
-        self._labeled_entry(form, "文件名前缀", self.ai_prefix_var)
-        self._labeled_entry(form, "生成张数", self.ai_count_var)
-        self._labeled_combo(form, "尺寸", self.ai_size_var, AI_SIZE_CHOICES)
-        self._labeled_combo(form, "质量", self.ai_quality_var, AI_QUALITY_CHOICES)
+        self._labeled_entry(form, "文件名前缀", self.ai_prefix_var, stretch=False, width=24)
+        self._labeled_entry(form, "生成张数", self.ai_count_var, stretch=False, width=12)
+        self._labeled_combo(form, "尺寸", self.ai_size_var, AI_SIZE_CHOICES, stretch=False, width=22)
+        self._labeled_combo(form, "质量", self.ai_quality_var, AI_QUALITY_CHOICES, stretch=False, width=18)
         ttk.Label(form, text="提示词", style="CardTitle.TLabel").pack(anchor="w", pady=(6, 0))
         self.ai_prompt_text = self._make_text(form, height=9)
         self.ai_prompt_text.pack(fill="x", pady=(6, 10))
@@ -394,15 +403,63 @@ class DesktopApp:
         ttk.Button(button_row, text="打开目录", command=self._open_ai_output_dir).pack(side="left", padx=(8, 0))
 
         ttk.Label(right, text="图片预览", style="CardTitle.TLabel").pack(anchor="w")
-        self.ai_preview_label = tk.Label(right, text="暂无图片", bg="#08111f", fg="#d6f3ff", height=16)
+        self.ai_preview_label = tk.Label(right, text="暂无图片", bg="#090d16", fg="#f4fbff", height=16)
         self.ai_preview_label.pack(fill="both", expand=False, pady=(8, 8))
         ttk.Label(right, text="已生成文件", style="CardTitle.TLabel").pack(anchor="w")
-        self.ai_files_list = tk.Listbox(right, height=8, bg="#08111f", fg="#d6f3ff", selectbackground="#144d7a", relief="flat")
+        self.ai_files_list = tk.Listbox(right, height=8, bg="#090d16", fg="#f4fbff", selectbackground="#381029", relief="flat")
         self.ai_files_list.pack(fill="x", pady=(8, 8))
         self.ai_files_list.bind("<<ListboxSelect>>", self._on_ai_file_select)
         ttk.Label(right, text="运行日志", style="CardTitle.TLabel").pack(anchor="w")
         self.ai_result_text = self._make_text(right, height=14)
         self.ai_result_text.pack(fill="both", expand=True, pady=(8, 0))
+
+    def _build_resource_tab(self) -> None:
+        container = ttk.Frame(self.resource_tab, style="Card.TFrame")
+        container.pack(fill="both", expand=True)
+        ttk.Label(container, text="资源中心：先装最小依赖，再按需补 GPU 运行时和模型。", style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(0, 10))
+
+        top = ttk.Panedwindow(container, orient="horizontal")
+        top.pack(fill="both", expand=True)
+        runtime_frame = ttk.Frame(top, style="Card.TFrame", padding=10)
+        model_frame = ttk.Frame(top, style="Card.TFrame", padding=10)
+        top.add(runtime_frame, weight=2)
+        top.add(model_frame, weight=3)
+
+        ttk.Label(runtime_frame, text="运行时组件", style="CardTitle.TLabel").pack(anchor="w")
+        runtime_buttons = ttk.Frame(runtime_frame, style="Card.TFrame")
+        runtime_buttons.pack(fill="x", pady=(8, 8))
+        ttk.Button(runtime_buttons, text="刷新状态", command=self._refresh_resource_status).pack(side="left")
+        ttk.Button(runtime_buttons, text="补齐最小运行依赖", command=self._install_minimal_runtime, style="Accent.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(runtime_buttons, text="安装选中运行时", command=self._install_selected_runtime).pack(side="left", padx=(8, 0))
+        ttk.Button(runtime_buttons, text="卸载选中运行时", command=self._uninstall_selected_runtime).pack(side="left", padx=(8, 0))
+        runtime_columns = ("title", "status", "location")
+        self.runtime_tree = ttk.Treeview(runtime_frame, columns=runtime_columns, show="headings", height=8)
+        for name, width in [("title", 180), ("status", 90), ("location", 260)]:
+            self.runtime_tree.heading(name, text=name)
+            self.runtime_tree.column(name, width=width, anchor="w")
+        self.runtime_tree.pack(fill="both", expand=True)
+
+        ttk.Label(model_frame, text="抠图模型", style="CardTitle.TLabel").pack(anchor="w")
+        model_buttons = ttk.Frame(model_frame, style="Card.TFrame")
+        model_buttons.pack(fill="x", pady=(8, 8))
+        ttk.Button(model_buttons, text="安装选中模型", command=self._install_selected_model, style="Accent.TButton").pack(side="left")
+        ttk.Button(model_buttons, text="卸载选中模型", command=self._uninstall_selected_model).pack(side="left", padx=(8, 0))
+        model_columns = ("title", "status", "size_mb", "files")
+        self.model_asset_tree = ttk.Treeview(model_frame, columns=model_columns, show="headings", height=8)
+        for name, width in [("title", 220), ("status", 90), ("size_mb", 90), ("files", 360)]:
+            self.model_asset_tree.heading(name, text=name)
+            self.model_asset_tree.column(name, width=width, anchor="w")
+        self.model_asset_tree.pack(fill="both", expand=True)
+
+        status_row = ttk.Frame(container, style="Card.TFrame")
+        status_row.pack(fill="x", pady=(10, 0))
+        ttk.Label(status_row, textvariable=self.resource_status_var, style="Subtle.TLabel").pack(side="left")
+        self.resource_progress = ttk.Progressbar(status_row, mode="indeterminate", length=220)
+        self.resource_progress.pack(side="right")
+
+        ttk.Label(container, text="安装日志", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
+        self.resource_log_text = self._make_text(container, height=12)
+        self.resource_log_text.pack(fill="both", expand=False, pady=(8, 0))
 
     def _build_agent_tab(self) -> None:
         frame = ttk.Panedwindow(self.agent_tab, orient="horizontal")
@@ -412,7 +469,7 @@ class DesktopApp:
         frame.add(form_shell, weight=2)
         frame.add(right, weight=3)
 
-        self._hint_label(form, "Agent 现在只保留三件事：看状态、改配置、直接对话。")
+        self._hint_label(form, "Agent 现在只保留状态、配置和聊天终端。")
         ttk.Label(form, text="当前状态", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 0))
         self._labeled_readonly(form, "Docker", self.agent_docker_state_var)
         self._labeled_readonly(form, "Hermes", self.agent_hermes_state_var)
@@ -422,42 +479,37 @@ class DesktopApp:
         status_row.pack(fill="x", pady=(4, 8))
         ttk.Button(status_row, text="刷新状态", command=self._refresh_agent_status).pack(side="left")
         ttk.Button(status_row, text="一键准备 Agent", command=self._ensure_agent_ready, style="Accent.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(status_row, text="查看日志", command=self._show_agent_logs).pack(side="left", padx=(8, 0))
         ttk.Button(status_row, text="打开数据目录", command=self._open_agent_data_dir).pack(side="left", padx=(8, 0))
 
         ttk.Label(form, text="模型与 API", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
-        self._hint_label(form, "在这里设置默认模型、提供方、API Key 和 Base URL。")
-        self._labeled_combo(form, "提供方", self.agent_model_provider_var, HERMES_PROVIDER_CHOICES)
-        self._labeled_entry(form, "默认模型", self.agent_model_default_var)
-        self._labeled_entry(form, "模型 Base URL", self.agent_model_base_url_var)
-        self._labeled_secret_entry(form, "API Key", self.agent_api_key_var)
-        self._labeled_readonly(form, "API 环境变量", self.agent_api_env_var)
-        self._labeled_entry(form, "提供方 Base URL", self.agent_provider_base_url_var)
-        self._labeled_readonly(form, "Base URL 环境变量", self.agent_provider_base_env_var)
+        self._hint_label(form, "这里直接改默认模型、API Key 和兼容地址。")
+        self._labeled_combo(form, "提供方", self.agent_model_provider_var, HERMES_PROVIDER_CHOICES, stretch=False, width=24)
+        self._labeled_entry(form, "默认模型", self.agent_model_default_var, stretch=False, width=52)
+        self._labeled_entry(form, "模型 Base URL", self.agent_model_base_url_var, stretch=False, width=56)
+        self._labeled_secret_entry(form, "API Key", self.agent_api_key_var, stretch=False, width=56)
+        self._labeled_readonly(form, "API 环境变量", self.agent_api_env_var, stretch=False, width=30)
+        self._labeled_entry(form, "提供方 Base URL", self.agent_provider_base_url_var, stretch=False, width=56)
+        self._labeled_readonly(form, "Base URL 环境变量", self.agent_provider_base_env_var, stretch=False, width=30)
         config_row = ttk.Frame(form, style="Card.TFrame")
         config_row.pack(fill="x", pady=(4, 8))
         ttk.Button(config_row, text="读取配置", command=self._load_agent_provider_settings).pack(side="left")
         ttk.Button(config_row, text="保存配置", command=self._save_agent_settings, style="Accent.TButton").pack(side="left", padx=(8, 0))
-        ttk.Button(config_row, text="查看当前配置", command=self._run_agent_config_show).pack(side="left", padx=(8, 0))
-
-        ttk.Label(form, text="Hermes Skill", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
-        ttk.Label(form, textvariable=self.agent_skill_path_var, style="Subtle.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(0, 8))
-        skill_row = ttk.Frame(form, style="Card.TFrame")
-        skill_row.pack(fill="x", pady=(4, 8))
-        ttk.Button(skill_row, text="导出 Skill", command=self._export_hermes_skill).pack(side="left")
-        ttk.Button(skill_row, text="打开 Skill 目录", command=self._open_skill_dir).pack(side="left", padx=(8, 0))
+        ttk.Button(config_row, text="测试 API", command=self._run_agent_api_test).pack(side="left", padx=(8, 0))
+        ttk.Button(config_row, text="测试聊天", command=self._run_agent_chat_test).pack(side="left", padx=(8, 0))
+        ttk.Button(config_row, text="压缩配置", command=self._configure_agent_aux_provider).pack(side="left", padx=(8, 0))
 
         ttk.Label(right, text="Hermes 对话终端", style="CardTitle.TLabel").pack(anchor="w")
         self.agent_result_text = self._make_text(right, height=20)
         self.agent_result_text.pack(fill="both", expand=True, pady=(8, 8))
         ttk.Label(right, text="当前会话名", style="Subtle.TLabel").pack(anchor="w")
-        ttk.Entry(right, textvariable=self.agent_session_name_var).pack(fill="x", pady=(4, 8))
-        self.agent_chat_input = ScrolledText(right, wrap="word", height=6, bg="#08111f", fg="#d6f3ff", insertbackground="#7cecff", relief="flat")
+        ttk.Entry(right, textvariable=self.agent_session_name_var, width=28).pack(anchor="w", pady=(4, 8))
+        self.agent_chat_input = ScrolledText(right, wrap="word", height=6, bg="#090d16", fg="#f4fbff", insertbackground="#00f6ff", relief="flat")
         self.agent_chat_input.pack(fill="x", pady=(0, 8))
         chat_row = ttk.Frame(right, style="Card.TFrame")
         chat_row.pack(fill="x")
         ttk.Button(chat_row, text="发送消息", command=self._send_agent_message, style="Accent.TButton").pack(side="left")
         ttk.Button(chat_row, text="清空对话", command=self._clear_agent_console).pack(side="left", padx=(8, 0))
-        ttk.Button(chat_row, text="查看日志", command=self._show_agent_logs).pack(side="left", padx=(8, 0))
 
     def _build_history_tab(self) -> None:
         controls = ttk.Frame(self.history_tab, style="Card.TFrame")
@@ -525,47 +577,53 @@ class DesktopApp:
         widget.bind_all("<Button-5>", _on_mousewheel, add="+")
 
     def _make_text(self, parent, *, height: int = 12) -> ScrolledText:
-        widget = ScrolledText(parent, wrap="word", height=height, bg="#08111f", fg="#d6f3ff", insertbackground="#7cecff", relief="flat")
-        widget.configure(selectbackground="#154d78")
+        widget = ScrolledText(parent, wrap="word", height=height, bg="#090d16", fg="#f4fbff", insertbackground="#00f6ff", relief="flat")
+        widget.configure(selectbackground="#381029")
         return widget
 
     def _hint_label(self, parent, text: str) -> None:
         ttk.Label(parent, text=text, style="Subtle.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(0, 8))
 
-    def _labeled_entry(self, parent, label: str, variable: tk.StringVar, browse_command=None):
+    def _labeled_entry(self, parent, label: str, variable: tk.StringVar, browse_command=None, *, stretch: bool = True, width: int = 48):
         wrapper = ttk.Frame(parent, style="Card.TFrame")
         wrapper.pack(fill="x", pady=6)
         ttk.Label(wrapper, text=label, style="CardTitle.TLabel").pack(anchor="w")
         row = ttk.Frame(wrapper, style="Card.TFrame")
         row.pack(fill="x", pady=(4, 0))
-        entry = ttk.Entry(row, textvariable=variable)
-        entry.pack(side="left", fill="x", expand=True)
+        entry = ttk.Entry(row, textvariable=variable, width=width)
+        entry.pack(side="left", fill="x" if stretch else "none", expand=stretch)
         if browse_command is not None:
             ttk.Button(row, text="浏览", command=browse_command).pack(side="left", padx=(8, 0))
         return entry
 
-    def _labeled_secret_entry(self, parent, label: str, variable: tk.StringVar):
+    def _labeled_secret_entry(self, parent, label: str, variable: tk.StringVar, *, stretch: bool = True, width: int = 48):
         wrapper = ttk.Frame(parent, style="Card.TFrame")
         wrapper.pack(fill="x", pady=6)
         ttk.Label(wrapper, text=label, style="CardTitle.TLabel").pack(anchor="w")
-        entry = ttk.Entry(wrapper, textvariable=variable, show="*")
-        entry.pack(fill="x", pady=(4, 0))
+        row = ttk.Frame(wrapper, style="Card.TFrame")
+        row.pack(fill="x", pady=(4, 0))
+        entry = ttk.Entry(row, textvariable=variable, show="*", width=width)
+        entry.pack(side="left", fill="x" if stretch else "none", expand=stretch)
         return entry
 
-    def _labeled_readonly(self, parent, label: str, variable: tk.StringVar):
+    def _labeled_readonly(self, parent, label: str, variable: tk.StringVar, *, stretch: bool = True, width: int = 48):
         wrapper = ttk.Frame(parent, style="Card.TFrame")
         wrapper.pack(fill="x", pady=6)
         ttk.Label(wrapper, text=label, style="CardTitle.TLabel").pack(anchor="w")
-        entry = ttk.Entry(wrapper, textvariable=variable, state="readonly")
-        entry.pack(fill="x", pady=(4, 0))
+        row = ttk.Frame(wrapper, style="Card.TFrame")
+        row.pack(fill="x", pady=(4, 0))
+        entry = ttk.Entry(row, textvariable=variable, state="readonly", width=width)
+        entry.pack(side="left", fill="x" if stretch else "none", expand=stretch)
         return entry
 
-    def _labeled_combo(self, parent, label: str, variable: tk.StringVar, values: list[str]):
+    def _labeled_combo(self, parent, label: str, variable: tk.StringVar, values: list[str], *, stretch: bool = True, width: int = 48):
         wrapper = ttk.Frame(parent, style="Card.TFrame")
         wrapper.pack(fill="x", pady=6)
         ttk.Label(wrapper, text=label, style="CardTitle.TLabel").pack(anchor="w")
-        combo = ttk.Combobox(wrapper, textvariable=variable, values=values, state="readonly")
-        combo.pack(fill="x", pady=(4, 0))
+        row = ttk.Frame(wrapper, style="Card.TFrame")
+        row.pack(fill="x", pady=(4, 0))
+        combo = ttk.Combobox(row, textvariable=variable, values=values, state="readonly", width=width)
+        combo.pack(side="left", fill="x" if stretch else "none", expand=stretch)
         return combo
 
     def _labeled_check(self, parent, label: str, variable: tk.BooleanVar) -> None:
@@ -581,29 +639,12 @@ class DesktopApp:
         if path:
             variable.set(path)
 
-    def _choose_background_gif(self) -> None:
-        path = filedialog.askopenfilename(filetypes=[("GIF", "*.gif")])
-        if not path:
-            return
-        self.app_settings.background_gif_path = path
-        save_app_settings(self.app_settings)
-        self.background_path_var.set(f"当前背景动图：{path}")
-        self._refresh_background_animation()
-        self.status_var.set("背景动图已更新")
-
-    def _reset_background_gif(self) -> None:
-        self.app_settings.background_gif_path = ""
-        save_app_settings(self.app_settings)
-        self.background_path_var.set("当前背景动图：默认赛博朋克背景")
-        self._refresh_background_animation()
-        self.status_var.set("已恢复默认背景")
-
     def _refresh_background_animation(self) -> None:
-        path = resolve_background_gif(self.app_settings)
+        path = BACKGROUND_GIF if BACKGROUND_GIF.exists() else None
         self._stop_background_animation()
         self._background_frames = []
         if path is None or not path.exists():
-            self.background_label.configure(image="", bg="#050814")
+            self.background_label.configure(image="", bg="#04050a")
             return
         try:
             source = Image.open(path)
@@ -620,7 +661,7 @@ class DesktopApp:
             self.background_label.configure(image=self._background_frames[0], text="")
             self._animate_background()
         except Exception:
-            self.background_label.configure(image="", bg="#050814")
+            self.background_label.configure(image="", bg="#04050a")
 
     def _stop_background_animation(self) -> None:
         if self._background_job is not None:
@@ -643,11 +684,131 @@ class DesktopApp:
         top = max((resized.height - target_h) // 2, 0)
         return resized.crop((left, top, left + target_w, top + target_h))
 
+    def _selected_runtime_component(self) -> str | None:
+        selection = getattr(self, "runtime_tree", None)
+        if selection is None:
+            return None
+        picked = self.runtime_tree.selection()
+        return picked[0] if picked else None
+
+    def _selected_model_asset(self) -> str | None:
+        selection = getattr(self, "model_asset_tree", None)
+        if selection is None:
+            return None
+        picked = self.model_asset_tree.selection()
+        return picked[0] if picked else None
+
+    def _set_resource_busy(self, busy: bool) -> None:
+        self.resource_runtime_busy = busy
+        self.resource_model_busy = busy
+        if hasattr(self, "resource_progress"):
+            if busy:
+                self.resource_progress.start(12)
+            else:
+                self.resource_progress.stop()
+
+    def _append_resource_log(self, text: str) -> None:
+        if not hasattr(self, "resource_log_text"):
+            return
+        self.resource_log_text.insert(tk.END, text.rstrip() + "\n")
+        self.resource_log_text.see(tk.END)
+
+    def _start_resource_process(self, title: str, command: list[str]) -> None:
+        if self.resource_runtime_busy or self.resource_model_busy:
+            messagebox.showwarning("资源任务进行中", "请先等当前安装或卸载任务完成。")
+            return
+
+        self.resource_log_text.delete("1.0", tk.END)
+        self._append_resource_log(f"{title} ...")
+        self.resource_status_var.set(f"{title} 中")
+        self._set_resource_busy(True)
+
+        def worker() -> None:
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(Path(__file__).resolve().parents[1]),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                assert process.stdout is not None
+                for line in process.stdout:
+                    self.queue.put(("resource_log", line.rstrip()))
+                return_code = process.wait()
+                self.queue.put(("resource_done", (title, return_code == 0, return_code)))
+            except Exception as exc:
+                self.queue.put(("resource_error", (title, exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _install_minimal_runtime(self) -> None:
+        self._start_resource_process("补齐最小运行依赖", build_runtime_manage_command("install", ["core", "cpu"]))
+
+    def _install_selected_runtime(self) -> None:
+        component_id = self._selected_runtime_component()
+        if not component_id:
+            messagebox.showwarning("未选择运行时", "请先在左侧选中一个运行时组件。")
+            return
+        self._start_resource_process(f"安装运行时：{component_id}", build_runtime_manage_command("install", [component_id]))
+
+    def _uninstall_selected_runtime(self) -> None:
+        component_id = self._selected_runtime_component()
+        if not component_id:
+            messagebox.showwarning("未选择运行时", "请先在左侧选中一个运行时组件。")
+            return
+        if component_id == "core":
+            messagebox.showinfo("保留核心依赖", "核心桌面依赖不会直接卸载，避免程序无法启动。")
+            return
+        if not messagebox.askyesno("确认卸载", f"确定要卸载 {component_id} 运行时吗？"):
+            return
+        self._start_resource_process(f"卸载运行时：{component_id}", build_runtime_manage_command("uninstall", [component_id]))
+
+    def _install_selected_model(self) -> None:
+        model_id = self._selected_model_asset()
+        if not model_id:
+            messagebox.showwarning("未选择模型", "请先在右侧选中一个模型。")
+            return
+        backend = choose_model_install_backend()
+        if backend is None:
+            if messagebox.askyesno("缺少基础运行时", "安装模型前需要先装一个抠图运行时。现在先补齐 CPU 运行时吗？"):
+                self._install_minimal_runtime()
+            return
+        self._start_resource_process(f"安装模型：{model_id}", build_model_manage_command("install", model_id, backend=backend))
+
+    def _uninstall_selected_model(self) -> None:
+        model_id = self._selected_model_asset()
+        if not model_id:
+            messagebox.showwarning("未选择模型", "请先在右侧选中一个模型。")
+            return
+        if not messagebox.askyesno("确认卸载", f"确定要卸载模型 {model_id} 吗？"):
+            return
+        self._start_resource_process(f"卸载模型：{model_id}", build_model_manage_command("uninstall", model_id))
+
+    def _refresh_resource_status(self) -> None:
+        if hasattr(self, "runtime_tree"):
+            for item in self.runtime_tree.get_children():
+                self.runtime_tree.delete(item)
+            for status in runtime_component_statuses():
+                label = "已安装" if status.installed else ("必需" if status.required else "未安装")
+                self.runtime_tree.insert("", "end", iid=status.id, values=(status.title, label, status.location))
+        if hasattr(self, "model_asset_tree"):
+            for item in self.model_asset_tree.get_children():
+                self.model_asset_tree.delete(item)
+            for status in model_statuses():
+                label = "已安装" if status.installed else "未安装"
+                self.model_asset_tree.insert("", "end", iid=status.id, values=(status.title, label, status.size_mb, ", ".join(status.files)))
+        self.resource_status_var.set("资源状态已刷新")
+
     def _refresh_hardware(self) -> None:
         self.hardware = detect_hardware_profile()
         self.plan = build_runtime_plan()
         self.backend_choices = self.executor.available_backends()
         self._refresh_dashboard()
+        self._refresh_resource_status()
         self._refresh_agent_status(silent=True)
         self.status_var.set("硬件信息已刷新")
 
@@ -907,19 +1068,21 @@ class DesktopApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _export_hermes_skill(self) -> None:
-        runner = Path(__file__).resolve().parents[1] / "scripts" / "run_neonpilot_cli.ps1"
-        skill_path = export_hermes_skill(Path(__file__).resolve().parents[1], runner)
-        self.agent_skill_path_var.set(f"Skill 已导出：{skill_path}")
-        self.status_var.set("Hermes Skill 已导出")
+    def _prompt_install_runtime(self, component_id: str, message: str) -> None:
+        if messagebox.askyesno("缺少运行时", f"{message}\n\n现在前往资源中心安装 {component_id} 运行时吗？"):
+            self.notebook.select(self.resource_tab)
+            self._start_resource_process(f"安装运行时：{component_id}", build_runtime_manage_command("install", [component_id]))
 
-    def _open_skill_dir(self) -> None:
-        target = self.agent_skill_path_var.get().replace("Skill 已导出：", "").strip()
-        path = Path(target) if target else HERMES_DATA_ROOT / "skills"
-        if path.is_file():
-            path = path.parent
-        path.mkdir(parents=True, exist_ok=True)
-        os.startfile(str(path))
+    def _prompt_install_model(self, model_id: str, message: str) -> None:
+        backend = choose_model_install_backend()
+        if backend is None:
+            if messagebox.askyesno("缺少基础运行时", f"{message}\n\n当前还没有可用运行时。先补齐最小运行依赖吗？"):
+                self.notebook.select(self.resource_tab)
+                self._install_minimal_runtime()
+            return
+        if messagebox.askyesno("缺少模型", f"{message}\n\n现在前往资源中心下载 {model_id} 吗？"):
+            self.notebook.select(self.resource_tab)
+            self._start_resource_process(f"安装模型：{model_id}", build_model_manage_command("install", model_id, backend=backend))
 
     def _open_agent_data_dir(self) -> None:
         path = HERMES_DATA_ROOT
@@ -994,8 +1157,82 @@ class DesktopApp:
         ]
         self.agent_result_text.delete("1.0", tk.END)
         self.agent_result_text.insert("1.0", "\n".join(extra + (["", current] if current else [])))
+        self.app_settings.agent_session_name = self.agent_session_name_var.get().strip() or "neonpilot"
+        save_app_settings(self.app_settings)
         self.status_var.set("Hermes 模型与 API 配置已保存")
         self._refresh_agent_status(silent=True)
+
+    def _run_agent_api_test(self) -> None:
+        model = self.agent_model_default_var.get().strip()
+        api_key = self.agent_api_key_var.get().strip()
+        base_url = self.agent_model_base_url_var.get().strip()
+        if not model or not api_key:
+            messagebox.showwarning("信息不完整", "请先填写默认模型和 API Key。")
+            return
+        if not base_url:
+            messagebox.showinfo("需要兼容地址", "测试 API 需要一个兼容的 Base URL。当前可以先用“测试聊天”验证 Hermes 主链路。")
+            return
+        self.agent_result_text.delete("1.0", tk.END)
+        self.agent_result_text.insert("1.0", "正在测试 API ...\n")
+        self.status_var.set("正在测试 Agent API")
+
+        def worker() -> None:
+            try:
+                ok, message = test_openai_compatible_provider(model, api_key, base_url)
+                self.queue.put(("agent_result", ("测试 API", ok, message, "")))
+            except Exception as exc:
+                self.queue.put(("agent_error", ("测试 API", exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _run_agent_chat_test(self) -> None:
+        if self.agent_chat_state_var.get() == "需先启动 Hermes":
+            messagebox.showwarning("Hermes 未就绪", "请先点击“一键准备 Agent”。")
+            return
+        self.agent_result_text.delete("1.0", tk.END)
+        self.agent_result_text.insert("1.0", "正在测试 Hermes 对话 ...\n")
+        self.status_var.set("正在测试 Hermes 对话")
+
+        def worker() -> None:
+            try:
+                ok, stdout, stderr = run_hermes_query(
+                    "请只回复：连接正常",
+                    session_name="neonpilot-self-check",
+                    model=self.agent_model_default_var.get().strip(),
+                    provider=self.agent_model_provider_var.get().strip(),
+                    base_url=self.agent_model_base_url_var.get().strip(),
+                )
+                self.queue.put(("agent_result", ("测试聊天", ok, stdout, stderr)))
+            except Exception as exc:
+                self.queue.put(("agent_error", ("测试聊天", exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_agent_aux_status(self) -> None:
+        ok, message = auxiliary_provider_status()
+        self.agent_result_text.delete("1.0", tk.END)
+        self.agent_result_text.insert("1.0", f"command: 压缩状态\nok: {ok}\n\nstdout:\n{message}\n\nstderr:\n")
+        self.status_var.set("已检查长对话压缩状态")
+
+    def _configure_agent_aux_provider(self) -> None:
+        current = load_auxiliary_provider_key()
+        api_key = simpledialog.askstring(
+            "压缩配置",
+            "填写 OPENROUTER_API_KEY，用于长对话压缩。\n留空并确定 = 清除当前配置。",
+            parent=self.root,
+            initialvalue=current,
+            show="*",
+        )
+        if api_key is None:
+            return
+        env_path = save_auxiliary_provider_key(api_key)
+        ok, message = auxiliary_provider_status()
+        self.agent_result_text.delete("1.0", tk.END)
+        self.agent_result_text.insert(
+            "1.0",
+            f"command: 压缩配置\nok: {ok}\n\nstdout:\n{message}\n.env: {env_path}\n\nstderr:\n",
+        )
+        self.status_var.set("已更新长对话压缩配置")
 
     def _ensure_agent_ready(self) -> None:
         self.agent_result_text.delete("1.0", tk.END)
@@ -1028,6 +1265,8 @@ class DesktopApp:
             messagebox.showwarning("Agent 未就绪", "请先确认 Docker、Hermes 和 API 都已准备好。")
             return
         session_name = self.agent_session_name_var.get().strip() or "neonpilot"
+        self.app_settings.agent_session_name = session_name
+        save_app_settings(self.app_settings)
         self.agent_result_text.insert(tk.END, f"\n你：{prompt}\n")
         self.agent_result_text.insert(tk.END, "Hermes：处理中...\n")
         self.agent_result_text.see(tk.END)
@@ -1049,15 +1288,6 @@ class DesktopApp:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _start_agent_docker(self) -> None:
-        self._start_agent_action("启动 Docker", start_docker_desktop)
-
-    def _start_agent_service(self) -> None:
-        self._start_agent_action("启动 Hermes", start_hermes_service)
-
-    def _stop_agent_service(self) -> None:
-        self._start_agent_action("停止 Hermes", stop_hermes_service)
-
     def _show_agent_logs(self) -> None:
         self.agent_result_text.delete("1.0", tk.END)
         self.agent_result_text.insert("1.0", "正在读取 Docker Hermes 日志...\n")
@@ -1069,60 +1299,6 @@ class DesktopApp:
                 self.queue.put(("agent_result", ("docker logs", ok, stdout, stderr)))
             except Exception as exc:
                 self.queue.put(("agent_error", ("docker logs", exc)))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _start_agent_action(self, title: str, action) -> None:
-        self.agent_result_text.delete("1.0", tk.END)
-        self.agent_result_text.insert("1.0", f"{title} 中...\n")
-        self.status_var.set(f"{title} 中")
-
-        def worker() -> None:
-            try:
-                result = action()
-                if isinstance(result, tuple):
-                    if len(result) == 2:
-                        ok, message = result
-                        self.queue.put(("agent_result", (title, ok, message, "")))
-                    else:
-                        ok, stdout, stderr = result
-                        self.queue.put(("agent_result", (title, ok, stdout, stderr)))
-                else:
-                    self.queue.put(("agent_result", (title, True, str(result), "")))
-            except Exception as exc:
-                self.queue.put(("agent_error", (title, exc)))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _run_agent_help(self) -> None:
-        self._start_agent_command("hermes --help")
-
-    def _run_agent_doctor(self) -> None:
-        self._start_agent_command("hermes doctor")
-
-    def _run_agent_config_show(self) -> None:
-        self._start_agent_command("hermes config show")
-
-    def _run_agent_custom(self) -> None:
-        command = self.agent_command_var.get().strip()
-        if not command:
-            messagebox.showwarning("缺少命令", "请先填写自定义命令。")
-            return
-        self.app_settings.hermes_command = command
-        save_app_settings(self.app_settings)
-        self._start_agent_command(command)
-
-    def _start_agent_command(self, command: str) -> None:
-        self.agent_result_text.delete("1.0", tk.END)
-        self.agent_result_text.insert("1.0", f"Running: {command}\n")
-        self.status_var.set(f"正在执行 Agent 命令：{command}")
-
-        def worker() -> None:
-            try:
-                ok, stdout, stderr = run_hermes_command(command)
-                self.queue.put(("agent_result", (command, ok, stdout, stderr)))
-            except Exception as exc:
-                self.queue.put(("agent_error", (command, exc)))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1143,7 +1319,11 @@ class DesktopApp:
                     output_widget.delete("1.0", tk.END)
                     output_widget.insert("1.0", f"{job_type} failed\n\n{exc}")
                     self.status_var.set(f"{job_type} 任务失败")
-                    if isinstance(exc, ExecutionError):
+                    if isinstance(exc, RuntimeMissingError):
+                        self._prompt_install_runtime(exc.component_id, str(exc))
+                    elif isinstance(exc, ModelMissingError):
+                        self._prompt_install_model(exc.model_id, str(exc))
+                    elif isinstance(exc, ExecutionError):
                         messagebox.showerror("执行失败", str(exc))
                 elif kind == "agent_result":
                     command, ok, stdout, stderr = payload
@@ -1151,6 +1331,24 @@ class DesktopApp:
                     self.agent_result_text.insert("1.0", f"command: {command}\nok: {ok}\n\nstdout:\n{stdout}\n\nstderr:\n{stderr}")
                     self.status_var.set("Agent 命令执行完成" if ok else "Agent 命令执行失败")
                     self._refresh_agent_status(silent=True)
+                elif kind == "resource_log":
+                    self._append_resource_log(payload)
+                elif kind == "resource_done":
+                    title, ok, return_code = payload
+                    self._set_resource_busy(False)
+                    self._refresh_hardware()
+                    self._append_resource_log(f"{title} 完成，退出码：{return_code}")
+                    self.resource_status_var.set(f"{title} 完成" if ok else f"{title} 失败")
+                    self.status_var.set(self.resource_status_var.get())
+                    if not ok:
+                        messagebox.showwarning("资源操作失败", f"{title} 失败，请查看安装日志。")
+                elif kind == "resource_error":
+                    title, exc = payload
+                    self._set_resource_busy(False)
+                    self._append_resource_log(f"{title} 失败：{exc}")
+                    self.resource_status_var.set(f"{title} 失败")
+                    self.status_var.set(self.resource_status_var.get())
+                    messagebox.showwarning("资源操作失败", str(exc))
                 elif kind == "agent_chat":
                     _prompt, ok, stdout, stderr = payload
                     transcript = self.agent_result_text.get("1.0", tk.END).rstrip()
@@ -1181,59 +1379,6 @@ class DesktopApp:
     def _format_result(self, result) -> str:
         return "\n".join([f"ok: {result.ok}", f"backend: {result.backend_used}", f"model: {result.model_used}", f"summary: {result.summary}", f"output: {result.output_path or '-'}", f"report: {result.report_path or '-'}", f"artifacts: {len(result.artifacts or [])}", "", "stdout:", result.stdout or "", "", "stderr:", result.stderr or ""])
 
-    def _maybe_show_guide(self) -> None:
-        if self.app_settings.show_guide_on_start:
-            self._show_guide_window()
-
-    def _show_guide_window(self) -> None:
-        if self._guide_window is not None and self._guide_window.winfo_exists():
-            self._guide_window.lift()
-            return
-        guide = tk.Toplevel(self.root)
-        guide.title(f"{APP_NAME} 快速导向")
-        guide.configure(bg="#08111f")
-        guide.geometry("760x520")
-        guide.transient(self.root)
-        guide.grab_set()
-        self._guide_window = guide
-        container = ttk.Frame(guide, style="Card.TFrame", padding=18)
-        container.pack(fill="both", expand=True)
-        ttk.Label(container, text=f"欢迎来到 {APP_NAME}", style="Header.TLabel").pack(anchor="w")
-        ttk.Label(container, text="这是一份简单导向，不会把界面讲得太复杂。", style="Subtle.TLabel").pack(anchor="w", pady=(6, 12))
-        for step in [
-            "1. 仪表盘：先看硬件和推荐后端。",
-            "2. 单图处理：先拿一张图验证模型和输出质量。",
-            "3. 智能批处理：整目录素材时更省心。",
-            "4. 批量命名：窗口缩小时表单也还能滚动访问。",
-            "5. AI 生图：你自己填 OpenAI 兼容地址和 API Key。",
-            "6. Agent：这里能启动 Docker Hermes、看日志、导出 Skill，并让 Hermes 反过来调用程序 CLI。",
-        ]:
-            ttk.Label(container, text=step, style="Subtle.TLabel", wraplength=700, justify="left").pack(anchor="w", pady=4)
-        quick_row = ttk.Frame(container, style="Card.TFrame")
-        quick_row.pack(fill="x", pady=(18, 10))
-        ttk.Button(quick_row, text="去看 Agent", command=lambda: self._jump_to_tab(self.agent_tab)).pack(side="left")
-        ttk.Button(quick_row, text="去看 AI 生图", command=lambda: self._jump_to_tab(self.ai_tab)).pack(side="left", padx=(8, 0))
-        ttk.Button(quick_row, text="去看批量命名", command=lambda: self._jump_to_tab(self.rename_tab)).pack(side="left", padx=(8, 0))
-        self.show_guide_var = tk.BooleanVar(value=self.app_settings.show_guide_on_start)
-        ttk.Checkbutton(container, text="下次启动继续显示这个导向", variable=self.show_guide_var).pack(anchor="w", pady=(8, 0))
-        bottom = ttk.Frame(container, style="Card.TFrame")
-        bottom.pack(fill="x", pady=(18, 0))
-        ttk.Button(bottom, text="保存并关闭", command=self._close_guide_window, style="Accent.TButton").pack(side="right")
-        guide.protocol("WM_DELETE_WINDOW", self._close_guide_window)
-
-    def _jump_to_tab(self, tab: ttk.Frame) -> None:
-        self.notebook.select(tab)
-        self._close_guide_window()
-
-    def _close_guide_window(self) -> None:
-        if self._guide_window is None:
-            return
-        self.app_settings.show_guide_on_start = bool(getattr(self, "show_guide_var", tk.BooleanVar(value=True)).get())
-        save_app_settings(self.app_settings)
-        self._guide_window.destroy()
-        self._guide_window = None
-
-
 def _center_window(window: tk.Toplevel | tk.Tk, width: int, height: int) -> None:
     screen_width = window.winfo_screenwidth()
     screen_height = window.winfo_screenheight()
@@ -1243,19 +1388,38 @@ def _center_window(window: tk.Toplevel | tk.Tk, width: int, height: int) -> None
 
 
 def show_splash(root: tk.Tk) -> tk.Toplevel | None:
-    if not SPLASH_PNG.exists():
+    splash_path = SPLASH_GIF if SPLASH_GIF.exists() else SPLASH_PNG
+    if not splash_path.exists():
         return None
     root.withdraw()
     splash = tk.Toplevel(root)
     splash.overrideredirect(True)
     splash.configure(bg="#050814")
     splash.attributes("-topmost", True)
-    image = Image.open(SPLASH_PNG).convert("RGBA")
-    photo = ImageTk.PhotoImage(image)
-    splash._photo_ref = photo
-    _center_window(splash, image.width, image.height)
-    label = tk.Label(splash, image=photo, borderwidth=0, highlightthickness=0)
+    source = Image.open(splash_path)
+    frames: list[ImageTk.PhotoImage] = []
+    for frame in ImageSequence.Iterator(source):
+        image = frame.convert("RGBA")
+        frames.append(ImageTk.PhotoImage(image))
+    if not frames:
+        frames.append(ImageTk.PhotoImage(source.convert("RGBA")))
+    splash._frames = frames
+    splash._frame_index = 0
+    _center_window(splash, frames[0].width(), frames[0].height())
+    label = tk.Label(splash, image=frames[0], borderwidth=0, highlightthickness=0)
     label.pack(fill="both", expand=True)
+    splash._label = label
+
+    def _animate() -> None:
+        frames_local = getattr(splash, "_frames", [])
+        if not frames_local:
+            return
+        index = getattr(splash, "_frame_index", 0)
+        label.configure(image=frames_local[index])
+        splash._frame_index = (index + 1) % len(frames_local)
+        splash._job = splash.after(90, _animate)
+
+    _animate()
     splash.update_idletasks()
     splash.update()
     return splash
@@ -1263,6 +1427,9 @@ def show_splash(root: tk.Tk) -> tk.Toplevel | None:
 
 def close_splash(root: tk.Tk, splash: tk.Toplevel | None) -> None:
     if splash is not None:
+        job = getattr(splash, "_job", None)
+        if job is not None:
+            splash.after_cancel(job)
         splash.destroy()
     root.deiconify()
     root.lift()
@@ -1274,7 +1441,7 @@ def main() -> None:
     splash = show_splash(root)
     DesktopApp(root)
     if splash is not None:
-        root.after(1000, lambda: close_splash(root, splash))
+        root.after(1600, lambda: close_splash(root, splash))
     else:
         close_splash(root, splash)
     root.mainloop()

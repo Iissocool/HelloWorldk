@@ -8,10 +8,8 @@ from pathlib import Path
 
 APP_NAME = "NeonPilot"
 APP_SLUG = "neonpilot"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 APP_TAGLINE = "Cyberpunk AI imaging cockpit"
-LEGACY_APP_NAME = "CutCanvas"
-LEGACY_APP_SLUG = "cutcanvas"
 
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
@@ -67,6 +65,7 @@ DOCS_ROOT = Path(
 )
 REMBG_SOURCE_ROOT = Path(os.environ.get("REMBG_SOURCE_DIR", WORKSPACE_ROOT / "rembg"))
 PATCH_ROOT = _workspace_or_bundle(WORKSPACE_ROOT / "patches", BUNDLE_ROOT / "patches")
+SCRIPTS_ROOT = _workspace_or_bundle(WORKSPACE_ROOT / "scripts", BUNDLE_ROOT / "scripts")
 ASSETS_ROOT = Path(
     os.environ.get(
         "NEONPILOT_ASSETS_DIR",
@@ -78,7 +77,9 @@ ICON_PNG = BRANDING_ROOT / "neonpilot-icon.png"
 ICON_ICO = BRANDING_ROOT / "neonpilot.ico"
 LOGO_PNG = BRANDING_ROOT / "neonpilot-logo.png"
 SPLASH_PNG = BRANDING_ROOT / "neonpilot-splash.png"
+SPLASH_GIF = BRANDING_ROOT / "neonpilot-splash.gif"
 BACKGROUND_GIF = BRANDING_ROOT / "neonpilot-bg.gif"
+VENV_ROOT = WORKSPACE_ROOT / "venvs"
 
 
 def migrate_legacy_data() -> None:

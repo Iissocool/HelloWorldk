@@ -1,39 +1,55 @@
-﻿# NeonPilot Architecture
+﻿# NeonPilot 架构说明
 
-## 桌面层
+## 当前架构
+
+### 桌面层
 - `app/desktop_app.py`
-- Tk 桌面程序主入口
-- 负责页面、背景动图、导向窗口、Agent 控制台
+- 基于 Tkinter
+- 负责桌面窗口、固定动态背景、启动动画、资源中心、AI 生图、Agent 聊天终端
 
-## 执行层
+### 调度层
 - `app/executor.py`
-- 负责单图、批处理、智能批处理、批量命名、AI 生图调用
+- 统一负责单图、批处理、智能批处理、异常回传和运行时检查
 
-## 命令桥
-- `app/command_bridge.py`
-- 负责把程序能力暴露成 CLI
-- 方便 Hermes 或其他自动化系统调用
+### 资源管理层
+- `app/runtime_manager.py`
+- 把运行时组件和模型资源拆开管理
+- 支持按需安装、按需卸载、状态检查和 CLI 调用
 
-## Hermes 适配
+### Agent 层
 - `app/hermes_adapter.py`
-- 负责 WSL 检测、Hermes 可用性检测、Skill 导出、命令执行
+- 优先走 Docker 路线
+- 负责 Docker 状态检查、Hermes 服务启动、日志读取、聊天调用和模型/API 配置
 
-## 配置与状态
-- `app/config.py`
-- `app/app_settings.py`
-- `app/ai_image.py`
-- `app/secure_store.py`
+### 命令桥
+- `app/command_bridge.py`
+- 对外暴露统一 CLI
+- 便于后续接入 Hermes skill 或其他自动化系统
 
-## 数据层
-- `app/history.py`
-- `data/neonpilot/`
+## 为什么现在不重写架构
+当前不建议立刻把 Tkinter 全量替换成 Qt / Tauri / Electron。
 
-## 品牌资源
-- `assets/branding/`
-- 图标、启动图、默认 GIF 背景
+原因很直接：
+- 当前瓶颈主要在推理运行时、模型资源安装、环境补齐和错误恢复
+- 不是 GUI 绘制速度问题
+- 这一轮已经通过固定宽度表单、可伸缩预览区、可伸缩聊天区和资源中心，解决了主要交互问题
 
-## 打包层
-- `NeonPilot.spec`
-- `packaging/NeonPilot.iss`
-- `scripts/build_windows.ps1`
-- `scripts/deploy_w_gemini.ps1`
+## 什么时候再考虑换壳
+当出现下面这些情况时，再考虑迁移：
+- 需要更复杂的视频组件或实时渲染特效
+- 需要更强的多窗口和高级布局系统
+- 需要更完整的嵌入式终端体验
+- 需要更复杂的插件系统和主题系统
+
+## 当前阶段最值得投入的方向
+- 把运行时安装、模型安装和更新体验继续做稳
+- 完善错误提示、日志导出和自动修复
+- 继续增强 Agent 与本地资源调度的联动
+- 稳定打包、部署和一键自检流程
+
+## 后续整体策略
+1. 稳定现有桌面架构
+2. 继续减少首次使用门槛
+3. 把运行时和模型资源做成真正的按需安装体系
+4. 让 Agent、AI 生图和抠图工作流进一步串起来
+5. 等功能复杂度明显跨过当前壳的舒适区，再做下一次架构升级

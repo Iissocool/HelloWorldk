@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 import yaml
 
@@ -178,6 +180,60 @@ def _update_env_pairs(updates: dict[str, str]) -> Path:
             new_lines.append(f"{key}={value}")
     path.write_text("\n".join(new_lines).strip() + "\n", encoding="utf-8")
     return path
+
+
+def auxiliary_provider_status() -> tuple[bool, str]:
+    env_pairs = _read_env_pairs()
+    if env_pairs.get("OPENROUTER_API_KEY", "").strip():
+        return True, "长对话压缩已启用。OPENROUTER_API_KEY 已配置。"
+    return False, "长对话压缩未启用。需要时再补 OPENROUTER_API_KEY 即可。"
+
+
+def load_auxiliary_provider_key() -> str:
+    env_pairs = _read_env_pairs()
+    return env_pairs.get("OPENROUTER_API_KEY", "").strip()
+
+
+def save_auxiliary_provider_key(api_key: str) -> Path:
+    return _update_env_pairs({"OPENROUTER_API_KEY": api_key.strip()})
+
+
+def test_openai_compatible_provider(model: str, api_key: str, base_url: str, timeout_sec: int = 45) -> tuple[bool, str]:
+    normalized = (base_url or "").strip().rstrip("/")
+    if not normalized:
+        return False, "请先填写 Base URL。"
+    if normalized.endswith("/chat/completions"):
+        endpoint = normalized
+    elif normalized.endswith("/v1"):
+        endpoint = normalized + "/chat/completions"
+    else:
+        endpoint = normalized + "/v1/chat/completions"
+    payload = json.dumps(
+        {
+            "model": model.strip(),
+            "messages": [{"role": "user", "content": "请只回复：连接正常"}],
+            "max_tokens": 12,
+            "temperature": 0,
+        }
+    ).encode("utf-8")
+    request = urllib_request.Request(
+        endpoint,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key.strip()}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=timeout_sec) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        return False, f"HTTP {exc.code}: {detail or exc.reason}"
+    except Exception as exc:
+        return False, str(exc)
+    return True, body
 
 
 def _load_session_map() -> dict[str, str]:
@@ -449,13 +505,13 @@ def inspect_hermes_environment() -> HermesEnvironmentStatus:
     except FileNotFoundError:
         status.docker_cli_available = False
         status.summary = "未检测到 Docker CLI。"
-        status.notes = ["请先安装 Docker Desktop，再回到 Agent 页点击刷新。"]
+        status.notes = ["请先安装 Docker Desktop，然后回到 Agent 页点击刷新状态。"]
         return status
 
     if not status.docker_daemon_running:
         status.summary = "Docker 已安装，但当前没有运行。"
         status.notes = [
-            "点击“启动 Docker”即可在后台拉起 Docker Desktop。",
+            "点击“一键准备 Agent”即可在后台拉起 Docker Desktop。",
             "这条路线不会再弹出 Ubuntu 终端窗口，命令会留在程序里执行。",
             f"Hermes 数据目录固定在：{status.data_root}",
         ]
@@ -486,19 +542,19 @@ def inspect_hermes_environment() -> HermesEnvironmentStatus:
     elif exists:
         status.summary = "Docker Hermes 容器已存在，但当前没有运行。"
         status.notes = [
-            "点击“启动 Hermes”即可恢复后台服务。",
+            "点击“一键准备 Agent”即可恢复后台服务。",
             f"数据目录：{status.data_root}",
         ]
     elif status.image_present:
         status.summary = "Docker 已就绪，Hermes 镜像已准备好。"
         status.notes = [
-            "点击“启动 Hermes”即可创建后台服务。",
+            "点击“一键准备 Agent”即可创建后台服务。",
             f"数据目录：{status.data_root}",
         ]
     else:
         status.summary = "Docker 已就绪，但 Hermes 镜像还未下载。"
         status.notes = [
-            "点击“启动 Hermes”时程序会自动拉取镜像。",
+            "点击“一键准备 Agent”时程序会自动拉取镜像。",
             f"数据目录：{status.data_root}",
         ]
     return status
@@ -625,6 +681,8 @@ Run these from Hermes inside Docker with `powershell.exe`:
 powershell.exe -ExecutionPolicy Bypass -File '{runner}' health
 powershell.exe -ExecutionPolicy Bypass -File '{runner}' hardware
 powershell.exe -ExecutionPolicy Bypass -File '{runner}' plan
+powershell.exe -ExecutionPolicy Bypass -File '{runner}' runtime-status
+powershell.exe -ExecutionPolicy Bypass -File '{runner}' model-status
 ```
 
 ## Common Commands
@@ -652,6 +710,16 @@ powershell.exe -ExecutionPolicy Bypass -File '{runner}' ai-test --base-url 'http
 AI image generation:
 ```bash
 powershell.exe -ExecutionPolicy Bypass -File '{runner}' ai-generate --base-url 'https://api.openai.com' --api-key 'YOUR_KEY' --model 'gpt-image-1' --prompt 'cyberpunk product poster' --output-dir 'W:\\images\\generated' --count 2 --size '1024x1024'
+```
+
+Runtime install:
+```bash
+powershell.exe -ExecutionPolicy Bypass -File '{runner}' runtime-install --components core cpu
+```
+
+Model install:
+```bash
+powershell.exe -ExecutionPolicy Bypass -File '{runner}' model-install --model 'bria-rmbg' --backend cpu
 ```
 
 ## Project Root

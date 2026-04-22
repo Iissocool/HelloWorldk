@@ -16,12 +16,28 @@ $appRoot = Join-Path $workspaceRoot "apps\NeonPilot"
 $installerRoot = Join-Path $appRoot "installer"
 $docsRoot = Join-Path $workspaceRoot "docs"
 $hermesRoot = Join-Path $workspaceRoot "data\neonpilot\hermes"
+$legacyTargets = @(
+  (Join-Path $workspaceRoot "run_cutcanvas.ps1"),
+  (Join-Path $workspaceRoot "run_cutcanvas.cmd"),
+  (Join-Path $workspaceRoot "run_background_desktop.ps1"),
+  (Join-Path $workspaceRoot "run_background_desktop.cmd"),
+  (Join-Path $workspaceRoot "apps\CutCanvas")
+)
 
 Get-Process -Name "NeonPilot" -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process -Name "CutCanvas" -ErrorAction SilentlyContinue | Stop-Process -Force
 
+foreach ($legacyTarget in $legacyTargets) {
+  if (Test-Path $legacyTarget) {
+    Remove-Item -Recurse -Force $legacyTarget
+  }
+}
+
 if (Test-Path $appRoot) {
-  Remove-Item -Recurse -Force $appRoot
+  cmd /c rmdir /s /q "$appRoot" | Out-Null
+  if (Test-Path $appRoot) {
+    Remove-Item -Recurse -Force $appRoot
+  }
 }
 New-Item -ItemType Directory -Force -Path $appRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $docsRoot | Out-Null
@@ -63,10 +79,6 @@ $readme = @(
 
 Set-Content -Path (Join-Path $workspaceRoot "run_neonpilot.ps1") -Value $psLauncher -Encoding utf8
 Set-Content -Path (Join-Path $workspaceRoot "run_neonpilot.cmd") -Value $cmdLauncher -Encoding ascii
-Set-Content -Path (Join-Path $workspaceRoot "run_cutcanvas.ps1") -Value $psLauncher -Encoding utf8
-Set-Content -Path (Join-Path $workspaceRoot "run_cutcanvas.cmd") -Value $cmdLauncher -Encoding ascii
-Set-Content -Path (Join-Path $workspaceRoot "run_background_desktop.ps1") -Value $psLauncher -Encoding utf8
-Set-Content -Path (Join-Path $workspaceRoot "run_background_desktop.cmd") -Value $cmdLauncher -Encoding ascii
 Set-Content -Path (Join-Path $workspaceRoot "README.md") -Value $readme -Encoding utf8
 
 Write-Host "Deployment complete."

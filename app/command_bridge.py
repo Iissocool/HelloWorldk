@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import subprocess
 import sys
 from dataclasses import asdict
 
@@ -19,6 +20,12 @@ from .hermes_adapter import (
 from .models import AIImageRunRequest, AIImageTestRequest, BatchRunRequest, RenameRunRequest, SingleRunRequest, SmartRunRequest
 from .planner import build_runtime_plan
 from .config import PROJECT_ROOT
+from .runtime_manager import (
+    build_model_manage_command,
+    build_runtime_manage_command,
+    model_statuses,
+    runtime_component_statuses,
+)
 
 
 executor = LocalExecutor()
@@ -37,6 +44,17 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("health", help="Return app health")
     sub.add_parser("hardware", help="Return detected hardware profile")
     sub.add_parser("plan", help="Return runtime plan")
+    sub.add_parser("runtime-status", help="Return optional runtime component status")
+    sub.add_parser("model-status", help="Return local model asset status")
+    runtime_install = sub.add_parser("runtime-install", help="Install runtime components")
+    runtime_install.add_argument("--components", nargs="+", required=True)
+    runtime_uninstall = sub.add_parser("runtime-uninstall", help="Uninstall runtime components")
+    runtime_uninstall.add_argument("--components", nargs="+", required=True)
+    model_install = sub.add_parser("model-install", help="Download one model on demand")
+    model_install.add_argument("--model", required=True)
+    model_install.add_argument("--backend", default="cpu")
+    model_uninstall = sub.add_parser("model-uninstall", help="Remove one model from local storage")
+    model_uninstall.add_argument("--model", required=True)
     sub.add_parser("hermes-status", help="Return Docker Hermes status")
     sub.add_parser("hermes-start-docker", help="Start Docker Desktop in the background")
     sub.add_parser("hermes-start", help="Start the Docker Hermes service container")
@@ -117,6 +135,22 @@ def main(argv: list[str] | None = None) -> int:
             return _print_json(detect_hardware_profile().model_dump())
         if args.command == "plan":
             return _print_json(build_runtime_plan().model_dump())
+        if args.command == "runtime-status":
+            return _print_json({"components": [asdict(item) for item in runtime_component_statuses()]})
+        if args.command == "model-status":
+            return _print_json({"models": [asdict(item) for item in model_statuses()]})
+        if args.command == "runtime-install":
+            completed = subprocess.run(build_runtime_manage_command("install", args.components), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+            return _print_json({"ok": completed.returncode == 0, "stdout": completed.stdout, "stderr": completed.stderr}, ok=completed.returncode == 0)
+        if args.command == "runtime-uninstall":
+            completed = subprocess.run(build_runtime_manage_command("uninstall", args.components), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+            return _print_json({"ok": completed.returncode == 0, "stdout": completed.stdout, "stderr": completed.stderr}, ok=completed.returncode == 0)
+        if args.command == "model-install":
+            completed = subprocess.run(build_model_manage_command("install", args.model, backend=args.backend), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+            return _print_json({"ok": completed.returncode == 0, "stdout": completed.stdout, "stderr": completed.stderr}, ok=completed.returncode == 0)
+        if args.command == "model-uninstall":
+            completed = subprocess.run(build_model_manage_command("uninstall", args.model), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+            return _print_json({"ok": completed.returncode == 0, "stdout": completed.stdout, "stderr": completed.stderr}, ok=completed.returncode == 0)
         if args.command == "hermes-status":
             return _print_json(asdict(inspect_hermes_environment()))
         if args.command == "hermes-start-docker":

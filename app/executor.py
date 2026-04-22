@@ -22,6 +22,11 @@ from .models import (
 )
 from .planner import build_runtime_plan
 from .renamer import build_rename_plan, execute_rename_plan
+from .runtime_manager import (
+    model_installed,
+    runtime_component_for_backend,
+    runtime_component_installed,
+)
 from .selection import analyze_image, choose_category, choose_model
 
 
@@ -51,6 +56,18 @@ class ExecutionError(RuntimeError):
     pass
 
 
+class RuntimeMissingError(ExecutionError):
+    def __init__(self, component_id: str, message: str) -> None:
+        super().__init__(message)
+        self.component_id = component_id
+
+
+class ModelMissingError(ExecutionError):
+    def __init__(self, model_id: str, message: str) -> None:
+        super().__init__(message)
+        self.model_id = model_id
+
+
 class LocalExecutor:
     def __init__(self, history_store: HistoryStore | None = None) -> None:
         self.history_store = history_store or HistoryStore()
@@ -60,7 +77,7 @@ class LocalExecutor:
         return [
             backend
             for backend in ordered
-            if backend == "auto" or self._runner_path(backend).exists()
+            if backend == "auto" or self._backend_ready(backend)
         ]
 
     def _runner_path(self, backend: str) -> Path:
@@ -74,24 +91,39 @@ class LocalExecutor:
         runner = self._runner_path(backend)
         if not runner.exists():
             raise ExecutionError(f"Required runner not found: {runner}")
+        component_id = runtime_component_for_backend(backend)
+        if not runtime_component_installed(component_id):
+            raise RuntimeMissingError(component_id, f"当前未安装 {component_id} 运行时。")
         return runner
+
+    def _backend_ready(self, backend: str) -> bool:
+        try:
+            runner = self._runner_path(backend)
+        except ExecutionError:
+            return False
+        if not runner.exists():
+            return False
+        component_id = runtime_component_for_backend(backend)
+        return runtime_component_installed(component_id)
 
     def _profile(self):
         return detect_hardware_profile()
 
     def _can_attempt_backend(self, backend: str) -> bool:
         normalized = "directml" if backend == "amd" else backend
-        if normalized == "cpu":
-            return self._runner_path("cpu").exists()
         if normalized not in RUNNERS:
             return False
-        if not self._runner_path(normalized).exists():
+        if not self._backend_ready(normalized):
             return False
         capability_key = BACKEND_CAPABILITY_KEYS.get(backend)
         if capability_key is None:
             return True
         profile = self._profile()
         return bool(profile.capabilities.get(capability_key, False))
+
+    def _ensure_model_available(self, model: str) -> None:
+        if not model_installed(model):
+            raise ModelMissingError(model, f"当前未安装模型：{model}")
 
     def resolve_backend(self, requested_backend: str, model: str | None = None) -> str:
         if requested_backend == "amd":
@@ -121,7 +153,7 @@ class LocalExecutor:
         if self._can_attempt_backend("cpu"):
             return "cpu"
 
-        raise ExecutionError("No usable backend runner is available on this machine.")
+        raise RuntimeMissingError("cpu", "当前还没有可用的抠图运行时。请先安装 CPU 或 GPU 运行时。")
 
     def _run(self, command: list[str]) -> ExecutionResult:
         completed = subprocess.run(
@@ -240,6 +272,7 @@ class LocalExecutor:
         )
 
     def run_single(self, request: SingleRunRequest, *, log_history: bool = True) -> ExecutionResult:
+        self._ensure_model_available(request.model)
         backend = self.resolve_backend(request.backend, request.model)
         command = self._build_single_command(backend, request)
         result = self._run(command)
@@ -263,6 +296,7 @@ class LocalExecutor:
         output_dir = Path(request.output_dir)
         if not input_dir.is_dir():
             raise ExecutionError(f"Input directory does not exist: {input_dir}")
+        self._ensure_model_available(request.model)
 
         images = self._image_paths_from_dir(input_dir, request.recurse, request.include_generated)
         if not images:
@@ -377,6 +411,7 @@ class LocalExecutor:
             metrics = analyze_image(input_path)
             category, reason = choose_category(input_path, metrics)
             model = choose_model(category, request.strategy)
+            self._ensure_model_available(model)
             backend = self.resolve_backend(request.backend, model)
             backends_used.append(backend)
             models_used.append(model)

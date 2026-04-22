@@ -9,6 +9,7 @@ datas = [
     (str(project_root / "assets"), "assets"),
     (str(project_root / "runtime"), "runtime"),
     (str(project_root / "patches"), "patches"),
+    (str(project_root / "scripts"), "scripts"),
     (str(project_root / "docs"), "docs"),
     (str(project_root / "README.md"), "."),
     (str(project_root / "requirements-app.txt"), "."),
