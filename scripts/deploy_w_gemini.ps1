@@ -15,12 +15,16 @@ $workspaceRoot = (Resolve-Path $WorkspaceRoot).Path
 $appRoot = Join-Path $workspaceRoot "apps\NeonPilot"
 $installerRoot = Join-Path $appRoot "installer"
 $docsRoot = Join-Path $workspaceRoot "docs"
+$hermesRoot = Join-Path $workspaceRoot "data\neonpilot\hermes"
 
 Get-Process -Name "NeonPilot" -ErrorAction SilentlyContinue | Stop-Process -Force
 Get-Process -Name "CutCanvas" -ErrorAction SilentlyContinue | Stop-Process -Force
 
 New-Item -ItemType Directory -Force -Path $appRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $docsRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $hermesRoot | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $hermesRoot "skills") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $hermesRoot "logs") | Out-Null
 
 robocopy $portableSource $appRoot /MIR /R:1 /W:1 | Out-Null
 New-Item -ItemType Directory -Force -Path $installerRoot | Out-Null
@@ -50,7 +54,8 @@ $readme = @(
   '',
   '- Portable app: `W:\gemini\apps\NeonPilot\NeonPilot.exe`',
   '- Installer: `W:\gemini\apps\NeonPilot\installer\NeonPilot-Setup.exe`',
-  '- Launcher: `W:\gemini\run_neonpilot.cmd`'
+  '- Launcher: `W:\gemini\run_neonpilot.cmd`',
+  '- Hermes data: `W:\gemini\data\neonpilot\hermes`'
 ) -join "`r`n"
 
 Set-Content -Path (Join-Path $workspaceRoot "run_neonpilot.ps1") -Value $psLauncher -Encoding utf8

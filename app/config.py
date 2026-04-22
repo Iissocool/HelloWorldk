@@ -55,7 +55,9 @@ LEGACY_DATA_ROOT = WORKSPACE_ROOT / "data" / "background-desktop"
 DATA_ROOT = Path(os.environ.get("BACKGROUND_APP_DATA_DIR", WORKSPACE_ROOT / "data" / APP_SLUG))
 AI_SETTINGS_PATH = DATA_ROOT / "ai_provider.json"
 APP_SETTINGS_PATH = DATA_ROOT / "app_settings.json"
-HERMES_EXPORT_ROOT = DATA_ROOT / "hermes"
+HERMES_WORKSPACE_ROOT = Path(os.environ.get("NEONPILOT_HERMES_ROOT", "W:/gemini")) if Path("W:/gemini").exists() else WORKSPACE_ROOT
+HERMES_DATA_ROOT = Path(os.environ.get("NEONPILOT_HERMES_DATA_DIR", HERMES_WORKSPACE_ROOT / "data" / APP_SLUG / "hermes"))
+HERMES_EXPORT_ROOT = HERMES_DATA_ROOT / "skills"
 REPORTS_ROOT = Path(os.environ.get("BACKGROUND_APP_REPORTS_DIR", WORKSPACE_ROOT / "reports"))
 DOCS_ROOT = Path(
     os.environ.get(

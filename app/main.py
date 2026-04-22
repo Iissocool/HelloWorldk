@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
@@ -224,14 +225,7 @@ def ai_generate(payload: AIImageRunRequest) -> dict:
 @app.get("/api/hermes/status")
 def hermes_status() -> dict:
     status = inspect_hermes_environment()
-    return {
-        "summary": status.summary,
-        "selected_distro": status.selected_distro,
-        "usable_distros": status.usable_distros,
-        "hermes_available": status.hermes_available,
-        "hermes_version": status.hermes_version,
-        "notes": status.notes,
-    }
+    return asdict(status)
 
 
 @app.get("/refresh")

@@ -1,13 +1,24 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
 import sys
+from dataclasses import asdict
 
 from .executor import ExecutionError, LocalExecutor
 from .hardware import detect_hardware_profile
+from .hermes_adapter import (
+    export_hermes_skill,
+    inspect_hermes_environment,
+    read_hermes_logs,
+    run_hermes_command,
+    start_docker_desktop,
+    start_hermes_service,
+    stop_hermes_service,
+)
 from .models import AIImageRunRequest, AIImageTestRequest, BatchRunRequest, RenameRunRequest, SingleRunRequest, SmartRunRequest
 from .planner import build_runtime_plan
+from .config import PROJECT_ROOT
 
 
 executor = LocalExecutor()
@@ -15,7 +26,7 @@ executor = LocalExecutor()
 
 def _print_json(payload: dict, ok: bool = True) -> int:
     text = json.dumps(payload, ensure_ascii=False, indent=2)
-    sys.stdout.write(text + "\n")
+    sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
     return 0 if ok else 1
 
 
@@ -26,6 +37,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("health", help="Return app health")
     sub.add_parser("hardware", help="Return detected hardware profile")
     sub.add_parser("plan", help="Return runtime plan")
+    sub.add_parser("hermes-status", help="Return Docker Hermes status")
+    sub.add_parser("hermes-start-docker", help="Start Docker Desktop in the background")
+    sub.add_parser("hermes-start", help="Start the Docker Hermes service container")
+    sub.add_parser("hermes-stop", help="Stop the Docker Hermes service container")
+    hermes_logs = sub.add_parser("hermes-logs", help="Read Docker Hermes logs")
+    hermes_logs.add_argument("--tail", type=int, default=200)
+    hermes_exec = sub.add_parser("hermes-exec", help="Run a Hermes command inside Docker")
+    hermes_exec.add_argument("--text", required=True)
+    sub.add_parser("hermes-export-skill", help="Export the NeonPilot Hermes skill into the Hermes data directory")
 
     single = sub.add_parser("single", help="Run one image matting job")
     single.add_argument("--input", required=True)
@@ -97,6 +117,26 @@ def main(argv: list[str] | None = None) -> int:
             return _print_json(detect_hardware_profile().model_dump())
         if args.command == "plan":
             return _print_json(build_runtime_plan().model_dump())
+        if args.command == "hermes-status":
+            return _print_json(asdict(inspect_hermes_environment()))
+        if args.command == "hermes-start-docker":
+            ok, message = start_docker_desktop()
+            return _print_json({"ok": ok, "message": message}, ok=ok)
+        if args.command == "hermes-start":
+            ok, stdout, stderr = start_hermes_service()
+            return _print_json({"ok": ok, "stdout": stdout, "stderr": stderr}, ok=ok)
+        if args.command == "hermes-stop":
+            ok, stdout, stderr = stop_hermes_service()
+            return _print_json({"ok": ok, "stdout": stdout, "stderr": stderr}, ok=ok)
+        if args.command == "hermes-logs":
+            ok, stdout, stderr = read_hermes_logs(args.tail)
+            return _print_json({"ok": ok, "stdout": stdout, "stderr": stderr}, ok=ok)
+        if args.command == "hermes-exec":
+            ok, stdout, stderr = run_hermes_command(args.text)
+            return _print_json({"ok": ok, "stdout": stdout, "stderr": stderr}, ok=ok)
+        if args.command == "hermes-export-skill":
+            skill_path = export_hermes_skill(PROJECT_ROOT, PROJECT_ROOT / "scripts" / "run_neonpilot_cli.ps1")
+            return _print_json({"ok": True, "skill_path": str(skill_path)})
         if args.command == "single":
             result = executor.run_single(SingleRunRequest(input_path=args.input, output_path=args.output, model=args.model, backend=args.backend), log_history=False)
             return _print_json(result.model_dump(), ok=result.ok)

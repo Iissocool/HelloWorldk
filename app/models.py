@@ -148,6 +148,7 @@ class AppSettings(BaseModel):
     background_gif_path: str = ""
     show_guide_on_start: bool = True
     preferred_hermes_distro: str = ""
+    hermes_command: str = "hermes --help"
 
 
 class ExecutionResult(BaseModel):

@@ -1,126 +1,306 @@
 ﻿from __future__ import annotations
 
-import re
+import json
+import os
+import shlex
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterable
 
-from .config import APP_NAME, APP_SLUG, HERMES_EXPORT_ROOT
+from .config import APP_NAME, APP_SLUG, HERMES_DATA_ROOT, HERMES_EXPORT_ROOT
 
 
-DOCKER_DISTROS = {"docker-desktop", "docker-desktop-data"}
+DOCKER_IMAGE = "nousresearch/hermes-agent:latest"
+DOCKER_CONTAINER = f"{APP_SLUG}-hermes"
+DOCKER_PORT = 8642
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
+WINDOWS_CREATION_FLAGS = CREATE_NO_WINDOW
+DOCKER_DESKTOP_CANDIDATES = [
+    Path(os.environ.get("ProgramFiles", "")) / "Docker" / "Docker" / "Docker Desktop.exe",
+    Path(os.environ.get("LocalAppData", "")) / "Programs" / "Docker" / "Docker" / "Docker Desktop.exe",
+]
 
 
 @dataclass(slots=True)
 class HermesEnvironmentStatus:
-    wsl_available: bool
-    usable_distros: list[str] = field(default_factory=list)
-    selected_distro: str | None = None
+    docker_cli_available: bool
+    docker_desktop_available: bool
+    docker_daemon_running: bool
+    docker_desktop_path: str = ""
+    image_present: bool = False
+    service_container_exists: bool = False
+    service_running: bool = False
     hermes_available: bool = False
     hermes_version: str = ""
+    container_name: str = DOCKER_CONTAINER
+    image_name: str = DOCKER_IMAGE
+    data_root: str = ""
     summary: str = ""
     notes: list[str] = field(default_factory=list)
 
 
-def _decode_wsl_output(raw: bytes) -> str:
-    if not raw:
-        return ""
-    if raw.count(b"\x00") > len(raw) // 4:
-        return raw.decode("utf-16le", errors="replace")
-    return raw.decode("utf-8", errors="replace")
+def _run_process(command: Iterable[str], *, timeout_sec: int = 20) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        list(command),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+        timeout=timeout_sec,
+        creationflags=WINDOWS_CREATION_FLAGS,
+    )
 
 
-def list_wsl_distros() -> list[str]:
+def _run_docker(*args: str, timeout_sec: int = 20) -> subprocess.CompletedProcess[str]:
+    return _run_process(["docker", *args], timeout_sec=timeout_sec)
+
+
+def docker_desktop_path() -> Path | None:
+    for candidate in DOCKER_DESKTOP_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def hermes_data_root() -> Path:
+    root = HERMES_DATA_ROOT
+    root.mkdir(parents=True, exist_ok=True)
+    for child in ["skills", "sessions", "memories", "logs", "cron", "hooks"]:
+        (root / child).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def docker_volume_path(path: Path) -> str:
+    return str(path.resolve())
+
+
+def docker_daemon_ready() -> bool:
     try:
-        completed = subprocess.run(["wsl.exe", "-l", "-v"], capture_output=True, check=False, timeout=12)
+        completed = _run_docker("info", timeout_sec=12)
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        return []
-    if completed.returncode != 0:
-        return []
-
-    text = _decode_wsl_output(completed.stdout)
-    distros: list[str] = []
-    for raw_line in text.splitlines():
-        line = raw_line.replace("\x00", "").strip()
-        if not line or line.upper().startswith("NAME"):
-            continue
-        line = line.lstrip("*").strip()
-        parts = re.split(r"\s{2,}", line)
-        if not parts:
-            continue
-        name = parts[0].strip()
-        if name and name not in DOCKER_DISTROS:
-            distros.append(name)
-    return distros
+        return False
+    return completed.returncode == 0
 
 
-def _run_wsl_command(distro: str, command: str, *, timeout_sec: int = 12) -> subprocess.CompletedProcess[bytes]:
+def docker_image_present(image: str = DOCKER_IMAGE) -> bool:
     try:
-        return subprocess.run(
-            ["wsl.exe", "-d", distro, "bash", "-lc", command],
-            capture_output=True,
-            check=False,
-            timeout=timeout_sec,
+        completed = _run_docker("image", "inspect", image, timeout_sec=15)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def docker_container_state(name: str = DOCKER_CONTAINER) -> tuple[bool, bool]:
+    try:
+        completed = _run_docker(
+            "container",
+            "inspect",
+            name,
+            "--format",
+            "{{json .State}}",
+            timeout_sec=15,
         )
-    except subprocess.TimeoutExpired as exc:
-        stderr = (exc.stderr or b"") + b"\nWSL command timed out."
-        return subprocess.CompletedProcess(exc.cmd or [], 124, exc.stdout or b"", stderr)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False, False
+    if completed.returncode != 0:
+        return False, False
+    try:
+        state = json.loads((completed.stdout or "").strip())
+    except json.JSONDecodeError:
+        return True, False
+    return True, bool(state.get("Running"))
 
 
-def inspect_hermes_environment(preferred_distro: str | None = None) -> HermesEnvironmentStatus:
-    distros = list_wsl_distros()
-    status = HermesEnvironmentStatus(wsl_available=True, usable_distros=distros)
-    if not distros:
-        status.summary = "未发现可用的 WSL Linux 发行版。"
+def start_docker_desktop(wait_sec: int = 120) -> tuple[bool, str]:
+    if docker_daemon_ready():
+        return True, "Docker 已可用。"
+    desktop = docker_desktop_path()
+    if desktop is None:
+        return False, "未发现 Docker Desktop。"
+
+    subprocess.Popen(
+        [str(desktop)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+        close_fds=True,
+    )
+
+    deadline = time.time() + wait_sec
+    while time.time() < deadline:
+        if docker_daemon_ready():
+            return True, "Docker Desktop 已启动。"
+        time.sleep(3)
+    return False, "Docker Desktop 已尝试启动，但守护进程还未就绪。"
+
+
+def pull_hermes_image(image: str = DOCKER_IMAGE) -> tuple[bool, str, str]:
+    completed = _run_docker("pull", image, timeout_sec=1800)
+    return completed.returncode == 0, completed.stdout, completed.stderr
+
+
+def inspect_hermes_environment() -> HermesEnvironmentStatus:
+    desktop = docker_desktop_path()
+    status = HermesEnvironmentStatus(
+        docker_cli_available=True,
+        docker_desktop_available=desktop is not None,
+        docker_daemon_running=False,
+        docker_desktop_path=str(desktop) if desktop else "",
+        data_root=str(hermes_data_root()),
+    )
+
+    try:
+        status.docker_daemon_running = docker_daemon_ready()
+    except FileNotFoundError:
+        status.docker_cli_available = False
+        status.summary = "未检测到 Docker CLI。"
+        status.notes = ["请先安装 Docker Desktop，再回到 Agent 页点击刷新。"]
+        return status
+
+    if not status.docker_daemon_running:
+        status.summary = "Docker 已安装，但当前没有运行。"
         status.notes = [
-            "Hermes Agent 官方支持 Linux、macOS 与 WSL2，不支持原生 Windows。",
-            "这台机器当前只有 docker-desktop WSL，没有 Ubuntu 之类的可用发行版。",
-            "下一步需要先安装 Ubuntu for WSL，然后在其中安装 Hermes。",
+            "点击“启动 Docker”即可在后台拉起 Docker Desktop。",
+            "这条路线不会再弹出 Ubuntu 终端窗口，命令会留在程序里执行。",
+            f"Hermes 数据目录固定在：{status.data_root}",
         ]
         return status
 
-    selected = preferred_distro if preferred_distro in distros else distros[0]
-    status.selected_distro = selected
-    version_check = _run_wsl_command(selected, "command -v hermes >/dev/null 2>&1 && hermes --version || true")
-    output = (_decode_wsl_output(version_check.stdout) + "\n" + _decode_wsl_output(version_check.stderr)).strip()
-    if version_check.returncode == 0 and output:
-        status.hermes_available = True
-        status.hermes_version = output.splitlines()[0].strip()
-        status.summary = f"Hermes 已在 WSL 发行版 {selected} 中可用。"
-        status.notes = [
-            f"当前检测到的版本信息：{status.hermes_version}",
-            "现在可以在程序里运行 help、doctor 这类非交互命令。",
-            "完整的 Hermes 终端会话仍建议在 WSL 终端中运行，以保持 prompt_toolkit 的完整交互体验。",
-        ]
-        return status
+    status.image_present = docker_image_present()
+    exists, running = docker_container_state()
+    status.service_container_exists = exists
+    status.service_running = running
+    status.hermes_available = status.image_present
 
-    if version_check.returncode == 124:
-        status.summary = f"已检测到 WSL 发行版 {selected}，但它还没有完成首启初始化。"
-        status.notes = [
-            "这通常表示 Ubuntu 第一次启动仍在等待创建 Linux 用户或完成发行版初始化。",
-            "先手动打开一次 Ubuntu，完成首启设置，再回到程序里刷新 Agent。",
-        ]
-        return status
+    if status.image_present:
+        version_ok, version_stdout, _version_stderr = run_hermes_command("hermes version", ensure_image=False)
+        if version_ok and version_stdout.strip():
+            for line in version_stdout.splitlines():
+                text = line.strip()
+                if text.startswith("Hermes Agent "):
+                    status.hermes_version = text
+                    break
 
-    status.summary = f"已检测到 WSL 发行版 {selected}，但尚未安装 Hermes。"
-    status.notes = [
-        "可以先在 Ubuntu WSL 中运行 Hermes 官方安装脚本。",
-        "装好后回到程序里点击“刷新 Agent”即可接管检测与命令执行。",
-    ]
+    if running:
+        status.summary = "Docker Hermes 服务正在运行。"
+        status.notes = [
+            "可以直接在下方运行 Hermes 命令。",
+            f"数据目录：{status.data_root}",
+            f"容器名：{DOCKER_CONTAINER}",
+        ]
+    elif exists:
+        status.summary = "Docker Hermes 容器已存在，但当前没有运行。"
+        status.notes = [
+            "点击“启动 Hermes”即可恢复后台服务。",
+            f"数据目录：{status.data_root}",
+        ]
+    elif status.image_present:
+        status.summary = "Docker 已就绪，Hermes 镜像已准备好。"
+        status.notes = [
+            "点击“启动 Hermes”即可创建后台服务。",
+            f"数据目录：{status.data_root}",
+        ]
+    else:
+        status.summary = "Docker 已就绪，但 Hermes 镜像还未下载。"
+        status.notes = [
+            "点击“启动 Hermes”时程序会自动拉取镜像。",
+            f"数据目录：{status.data_root}",
+        ]
     return status
 
 
-def run_hermes_command(command: str, *, distro: str | None = None) -> tuple[bool, str, str]:
-    status = inspect_hermes_environment(distro)
-    if not status.selected_distro:
-        raise RuntimeError(status.summary + "\n" + "\n".join(status.notes))
-    if not status.hermes_available:
-        raise RuntimeError(status.summary + "\n" + "\n".join(status.notes))
+def start_hermes_service() -> tuple[bool, str, str]:
+    ready, message = start_docker_desktop()
+    if not ready:
+        return False, "", message
 
-    completed = _run_wsl_command(status.selected_distro, f"source ~/.bashrc >/dev/null 2>&1; {command}", timeout_sec=20)
-    stdout = _decode_wsl_output(completed.stdout).replace("\x00", "")
-    stderr = _decode_wsl_output(completed.stderr).replace("\x00", "")
-    return completed.returncode == 0, stdout, stderr
+    data_root = hermes_data_root()
+    if not docker_image_present():
+        ok, stdout, stderr = pull_hermes_image()
+        if not ok:
+            return False, stdout, stderr
+
+    exists, running = docker_container_state()
+    if running:
+        return True, f"Hermes 服务已在运行。\n数据目录：{data_root}", ""
+    if exists:
+        completed = _run_docker("start", DOCKER_CONTAINER, timeout_sec=60)
+        return completed.returncode == 0, completed.stdout, completed.stderr
+
+    completed = _run_docker(
+        "run",
+        "-d",
+        "--name",
+        DOCKER_CONTAINER,
+        "--restart",
+        "unless-stopped",
+        "--memory=2g",
+        "--cpus=2",
+        "--shm-size=1g",
+        "-p",
+        f"{DOCKER_PORT}:{DOCKER_PORT}",
+        "-v",
+        f"{docker_volume_path(data_root)}:/opt/data",
+        DOCKER_IMAGE,
+        "gateway",
+        "run",
+        timeout_sec=120,
+    )
+    return completed.returncode == 0, completed.stdout, completed.stderr
+
+
+def stop_hermes_service() -> tuple[bool, str, str]:
+    exists, running = docker_container_state()
+    if not exists:
+        return True, "Hermes 容器当前还不存在。", ""
+    if not running:
+        return True, "Hermes 服务已经是停止状态。", ""
+    completed = _run_docker("stop", DOCKER_CONTAINER, timeout_sec=60)
+    return completed.returncode == 0, completed.stdout, completed.stderr
+
+
+def read_hermes_logs(tail: int = 200) -> tuple[bool, str, str]:
+    exists, _running = docker_container_state()
+    if not exists:
+        return False, "", "Hermes 容器还不存在，暂时没有日志。"
+    completed = _run_docker("logs", f"--tail={tail}", DOCKER_CONTAINER, timeout_sec=60)
+    if completed.returncode == 0:
+        return True, completed.stdout or completed.stderr, ""
+    return False, completed.stdout, completed.stderr
+
+
+def run_hermes_command(command: str, *, ensure_image: bool = True) -> tuple[bool, str, str]:
+    ready, message = start_docker_desktop()
+    if not ready:
+        raise RuntimeError(message)
+
+    data_root = hermes_data_root()
+    if ensure_image and not docker_image_present():
+        ok, stdout, stderr = pull_hermes_image()
+        if not ok:
+            raise RuntimeError((stdout + "\n" + stderr).strip())
+
+    tokens = shlex.split(command)
+    if tokens and tokens[0].lower() == "hermes":
+        tokens = tokens[1:]
+    if not tokens:
+        raise RuntimeError("请输入有效的 Hermes 命令，例如 hermes --help 或 hermes doctor。")
+
+    completed = _run_docker(
+        "run",
+        "--rm",
+        "-v",
+        f"{docker_volume_path(data_root)}:/opt/data",
+        DOCKER_IMAGE,
+        *tokens,
+        timeout_sec=600,
+    )
+    return completed.returncode == 0, completed.stdout, completed.stderr
 
 
 def export_hermes_skill(project_root: Path, runner_script: Path, *, export_root: Path | None = None) -> Path:
@@ -145,7 +325,7 @@ Use this skill when Hermes needs to drive the Windows app project instead of inv
 - If a command fails, surface stderr and stop before retrying.
 
 ## Windows CLI Wrapper
-Run these from Hermes inside WSL with `powershell.exe`:
+Run these from Hermes inside Docker with `powershell.exe`:
 
 ```bash
 powershell.exe -ExecutionPolicy Bypass -File '{runner}' health
