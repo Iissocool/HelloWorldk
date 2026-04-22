@@ -96,6 +96,10 @@ def build_rename_plan(request: RenameRunRequest) -> list[RenamePlanItem]:
         raise ValueError("当前是“查找替换”模式，必须填写“查找文本”。")
     if request.step <= 0:
         raise ValueError("步长必须大于 0。")
+    if request.padding_width < 1:
+        raise ValueError("序号位数必须大于 0。")
+    if request.mode == "fresh" and not request.fresh_name.strip():
+        raise ValueError("当前是“全新命名”模式，必须填写“基础名”。")
 
     for source_path in files:
         try:
@@ -108,13 +112,15 @@ def build_rename_plan(request: RenameRunRequest) -> list[RenamePlanItem]:
                     parent=source_path.parent.name,
                     ext=source_path.suffix.lstrip("."),
                 )
-            else:
+            elif request.mode == "replace":
                 rendered_name = apply_replace(
                     source_path.stem,
                     request.find_text,
                     request.replace_text,
                     case_sensitive=request.case_sensitive,
                 )
+            else:
+                rendered_name = f"{request.fresh_name}{index_value:0{request.padding_width}d}"
         except Exception as exc:
             plan.append(
                 RenamePlanItem(

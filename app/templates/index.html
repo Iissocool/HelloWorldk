@@ -174,31 +174,25 @@
           <select name="mode">
             <option value="template">template</option>
             <option value="replace">replace</option>
+            <option value="fresh">fresh</option>
           </select>
         </label>
-        <p class="summary-line">模式说明：`template` 用模板生成新名字；`replace` 用“查找文本”替换“替换文本”。</p>
+        <p class="summary-line">模式说明：`template` 模板命名；`replace` 查找替换；`fresh` 全新覆盖命名。</p>
+        <label>基础名<input name="fresh_name" value="image_" /></label>
         <label>模板<input name="template" value="{index:03d}_{name}" /></label>
-        <p class="summary-line">模板模式示例：<code>{index:03d}_{name}</code>，结果会类似 <code>001_原文件名</code>。</p>
         <label>查找文本<input name="find_text" placeholder="old" /></label>
-        <p class="summary-line">查找文本：要被替换掉的内容，例如 <code>old</code>。</p>
         <label>替换文本<input name="replace_text" placeholder="new" /></label>
-        <p class="summary-line">替换文本：替换后的内容，例如 <code>new</code>；留空表示删除查找到的文字。</p>
         <label>前缀<input name="prefix" placeholder="prefix_" /></label>
-        <p class="summary-line">前缀：加在文件名前面，例如 <code>商品_</code>。</p>
         <label>后缀<input name="suffix" placeholder="_suffix" /></label>
-        <p class="summary-line">后缀：加在文件名后面，例如 <code>_主图</code>。</p>
         <label>起始序号<input name="start_index" type="number" value="1" /></label>
         <label>步长<input name="step" type="number" value="1" /></label>
+        <label>序号位数<input name="padding_width" type="number" value="3" /></label>
         <label>扩展名过滤<input name="extensions" placeholder=".png,.jpg,.jpeg" /></label>
-        <p class="summary-line">扩展名过滤示例：<code>.png,.jpg,.jpeg</code>。留空表示当前目录下所有文件都参与命名。</p>
         <p class="summary-line">
-          模板变量说明：
-          <code>{index}</code> = 当前序号；
-          <code>{index:03d}</code> = 补零后的序号，例如 001；
-          <code>{name}</code> = 原文件名，不含扩展名；
-          <code>{stem}</code> = 原文件名，不含扩展名，和 {name} 一样；
-          <code>{parent}</code> = 当前文件所在文件夹名；
-          <code>{ext}</code> = 原扩展名，不带点。
+          用法：`fresh` 示例 <code>image_001</code>；
+          `template` 示例 <code>{index:03d}_{name}</code>；
+          `replace` 示例把 <code>old</code> 改成 <code>new</code>。
+          变量：<code>{index}</code>、<code>{index:03d}</code>、<code>{name}</code>、<code>{stem}</code>、<code>{parent}</code>、<code>{ext}</code>。
         </p>
         <label class="inline"><input type="checkbox" name="recurse" /> 递归子目录</label>
         <label class="inline"><input type="checkbox" name="case_sensitive" /> 查找替换区分大小写</label>

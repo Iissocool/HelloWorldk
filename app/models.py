@@ -21,7 +21,7 @@ BackendId = Literal[
     "cpu",
 ]
 JobType = Literal["single", "batch", "smart", "rename"]
-RenameMode = Literal["template", "replace"]
+RenameMode = Literal["template", "replace", "fresh"]
 
 
 @dataclass(slots=True)
@@ -103,12 +103,14 @@ class RenameRunRequest(BaseModel):
     input_dir: str
     mode: RenameMode = "template"
     template: str = "{index:03d}_{name}"
+    fresh_name: str = "image"
     find_text: str = ""
     replace_text: str = ""
     prefix: str = ""
     suffix: str = ""
     start_index: int = 1
     step: int = 1
+    padding_width: int = 3
     recurse: bool = False
     extensions: str = ""
     case_sensitive: bool = False
