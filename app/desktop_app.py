@@ -9,6 +9,10 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from PIL import Image, ImageSequence, ImageTk
+try:
+    import pywinstyles
+except Exception:
+    pywinstyles = None
 
 from .ai_image import load_ai_settings, mask_api_key, save_ai_settings
 from .app_settings import load_app_settings, save_app_settings
@@ -87,6 +91,9 @@ ENTRY_BG = "#0c1a36"
 ENTRY_READONLY_BG = "#13284f"
 ENTRY_BORDER = "#8ddfff"
 ENTRY_TEXT = "#f7fcff"
+GLASS_CARD_OPACITY = 0.82
+GLASS_PANEL_OPACITY = 0.88
+GLASS_INPUT_OPACITY = 0.94
 
 
 class DesktopApp:
@@ -111,6 +118,9 @@ class DesktopApp:
         self._background_index = 0
         self._background_job: str | None = None
         self._background_targets: list[tk.Label] = []
+        self._glass_widgets: list[tuple[tk.Widget, float]] = []
+        self._responsive_panes: list[tuple[ttk.Panedwindow, float, int, int]] = []
+        self._resize_refresh_job: str | None = None
 
         self.hardware = detect_hardware_profile()
         self.plan = build_runtime_plan()
@@ -194,6 +204,9 @@ class DesktopApp:
         self._load_agent_provider_settings()
         self._refresh_resource_status()
         self._refresh_agent_status(silent=True)
+        self.root.bind("<Configure>", self._on_root_resize, add="+")
+        self.root.after(60, self._apply_window_material)
+        self.root.after(260, self._apply_glass_effects)
         self.root.after(150, self._poll_queue)
 
     def _apply_theme(self) -> None:
@@ -329,6 +342,70 @@ class DesktopApp:
         )
         style.configure("TPanedwindow", background=ROOT_BG, borderwidth=0, sashwidth=8)
 
+    def _apply_window_material(self) -> None:
+        if pywinstyles is None or os.name != "nt":
+            return
+        try:
+            pywinstyles.apply_style(self.root, "acrylic")
+            pywinstyles.change_header_color(self.root, color="#06101f")
+            pywinstyles.change_title_color(self.root, color="#f4fbff")
+            pywinstyles.change_border_color(self.root, color=BORDER_BLUE)
+        except Exception:
+            pass
+
+    def _register_glass(self, widget: tk.Widget, opacity: float = GLASS_CARD_OPACITY) -> tk.Widget:
+        self._glass_widgets.append((widget, opacity))
+        return widget
+
+    def _apply_glass_effects(self) -> None:
+        if pywinstyles is None or os.name != "nt":
+            return
+        for widget, opacity in self._glass_widgets:
+            try:
+                pywinstyles.set_opacity(widget, value=opacity)
+            except Exception:
+                continue
+
+    def _register_responsive_pane(
+        self,
+        pane: ttk.Panedwindow,
+        *,
+        ratio: float = 0.38,
+        left_min: int = 420,
+        right_min: int = 620,
+    ) -> None:
+        self._responsive_panes.append((pane, ratio, left_min, right_min))
+        pane.bind("<Configure>", lambda _event, target=pane: self._reflow_responsive_pane(target), add="+")
+        self.root.after(180, lambda target=pane: self._reflow_responsive_pane(target))
+
+    def _reflow_responsive_pane(self, pane: ttk.Panedwindow) -> None:
+        try:
+            width = pane.winfo_width()
+            if width <= 120:
+                return
+            for target, ratio, left_min, right_min in self._responsive_panes:
+                if target is pane:
+                    sash_x = max(left_min, min(int(width * ratio), width - right_min))
+                    if sash_x > 0:
+                        pane.sashpos(0, sash_x)
+                    break
+        except Exception:
+            return
+
+    def _on_root_resize(self, event) -> None:
+        if event.widget is not self.root:
+            return
+        if self._resize_refresh_job is not None:
+            self.root.after_cancel(self._resize_refresh_job)
+        self._resize_refresh_job = self.root.after(220, self._refresh_layout_for_resize)
+
+    def _refresh_layout_for_resize(self) -> None:
+        self._resize_refresh_job = None
+        for pane, _, _, _ in self._responsive_panes:
+            self._reflow_responsive_pane(pane)
+        self._refresh_background_animation()
+        self.root.after(120, self._apply_glass_effects)
+
     def _apply_window_icon(self) -> None:
         if ICON_PNG.exists():
             try:
@@ -365,6 +442,7 @@ class DesktopApp:
 
         hero_card = ttk.Frame(self.root, style="Card.TFrame", padding=14)
         hero_card.pack(fill="x", padx=18, pady=(12, 12))
+        self._register_glass(hero_card, GLASS_CARD_OPACITY)
         ttk.Label(hero_card, text="当前工作方式", style="CardTitle.TLabel").pack(anchor="w")
         ttk.Label(hero_card, text="桌面程序现在默认走固定赛博朋克背景、聊天式 Agent、最小依赖先启动，以及按需安装运行时与模型。", style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(8, 0))
         ttk.Label(hero_card, textvariable=self.background_path_var, style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(8, 0))
@@ -420,14 +498,19 @@ class DesktopApp:
     def _build_dashboard_tab(self) -> None:
         banner = ttk.Frame(self.dashboard_tab, style="Card.TFrame", padding=12)
         banner.pack(fill="x", pady=(0, 12))
+        self._register_glass(banner, GLASS_CARD_OPACITY)
         ttk.Label(banner, text="快速开始", style="CardTitle.TLabel").pack(anchor="w")
         ttk.Label(banner, text="先看硬件状态，再选处理功能。Agent 页适合查看运行状态、设置 API、直接与 Hermes 对话。", style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(8, 0))
 
         top = ttk.Panedwindow(self.dashboard_tab, orient="horizontal")
         top.pack(fill="both", expand=True)
+        self._register_responsive_pane(top, ratio=0.34, left_min=360, right_min=700)
         left = ttk.Frame(top, style="Card.TFrame", padding=10)
         mid = ttk.Frame(top, style="Card.TFrame", padding=10)
         right = ttk.Frame(top, style="Card.TFrame", padding=10)
+        self._register_glass(left, GLASS_CARD_OPACITY)
+        self._register_glass(mid, GLASS_CARD_OPACITY)
+        self._register_glass(right, GLASS_CARD_OPACITY)
         top.add(left, weight=3)
         top.add(mid, weight=2)
         top.add(right, weight=2)
@@ -515,8 +598,10 @@ class DesktopApp:
     def _build_ai_tab(self) -> None:
         frame = ttk.Panedwindow(self.ai_tab, orient="horizontal")
         frame.pack(fill="both", expand=True)
+        self._register_responsive_pane(frame, ratio=0.36, left_min=420, right_min=640)
         form_shell, form = self._build_scrollable_form(frame)
         right = ttk.Frame(frame, style="Card.TFrame", padding=10)
+        self._register_glass(right, GLASS_CARD_OPACITY)
         frame.add(form_shell, weight=2)
         frame.add(right, weight=3)
 
@@ -552,6 +637,7 @@ class DesktopApp:
             highlightbackground="#1d4473",
             highlightcolor="#1d4473",
         )
+        self._register_glass(self.ai_preview_label, GLASS_PANEL_OPACITY)
         self.ai_preview_label.pack(fill="both", expand=False, pady=(8, 8))
         ttk.Label(right, text="已生成文件", style="CardTitle.TLabel").pack(anchor="w")
         self.ai_files_list = tk.Listbox(
@@ -567,6 +653,7 @@ class DesktopApp:
             highlightbackground="#1d4473",
             highlightcolor="#1d4473",
         )
+        self._register_glass(self.ai_files_list, GLASS_PANEL_OPACITY)
         self.ai_files_list.pack(fill="x", pady=(8, 8))
         self.ai_files_list.bind("<<ListboxSelect>>", self._on_ai_file_select)
         ttk.Label(right, text="运行日志", style="CardTitle.TLabel").pack(anchor="w")
@@ -576,12 +663,16 @@ class DesktopApp:
     def _build_resource_tab(self) -> None:
         container = ttk.Frame(self.resource_tab, style="Card.TFrame")
         container.pack(fill="both", expand=True)
+        self._register_glass(container, GLASS_CARD_OPACITY)
         ttk.Label(container, text="资源中心：先装最小依赖，再按需补 GPU 运行时和模型。", style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(0, 10))
 
         top = ttk.Panedwindow(container, orient="horizontal")
         top.pack(fill="both", expand=True)
+        self._register_responsive_pane(top, ratio=0.38, left_min=420, right_min=620)
         runtime_frame = ttk.Frame(top, style="Card.TFrame", padding=10)
         model_frame = ttk.Frame(top, style="Card.TFrame", padding=10)
+        self._register_glass(runtime_frame, GLASS_CARD_OPACITY)
+        self._register_glass(model_frame, GLASS_CARD_OPACITY)
         top.add(runtime_frame, weight=2)
         top.add(model_frame, weight=3)
 
@@ -624,8 +715,10 @@ class DesktopApp:
     def _build_agent_tab(self) -> None:
         frame = ttk.Panedwindow(self.agent_tab, orient="horizontal")
         frame.pack(fill="both", expand=True)
+        self._register_responsive_pane(frame, ratio=0.39, left_min=430, right_min=620)
         form_shell, form = self._build_scrollable_form(frame)
         right = ttk.Frame(frame, style="Card.TFrame", padding=10)
+        self._register_glass(right, GLASS_CARD_OPACITY)
         frame.add(form_shell, weight=2)
         frame.add(right, weight=3)
 
@@ -676,6 +769,7 @@ class DesktopApp:
             highlightbackground=ENTRY_BORDER,
             highlightcolor=GLOW_BLUE_SOFT,
         )
+        self._register_glass(session_entry, GLASS_INPUT_OPACITY)
         session_entry.pack(anchor="w", pady=(4, 8))
         self.agent_chat_input = ScrolledText(
             right,
@@ -690,6 +784,7 @@ class DesktopApp:
             highlightbackground="#204a7a",
             highlightcolor=BORDER_BLUE,
         )
+        self._register_glass(self.agent_chat_input, GLASS_PANEL_OPACITY)
         self.agent_chat_input.vbar.configure(
             bg=SCROLL_FACE,
             activebackground="#2f78c7",
@@ -707,6 +802,7 @@ class DesktopApp:
     def _build_history_tab(self) -> None:
         controls = ttk.Frame(self.history_tab, style="Card.TFrame")
         controls.pack(fill="x", pady=(0, 8))
+        self._register_glass(controls, GLASS_CARD_OPACITY)
         ttk.Button(controls, text="刷新历史", command=self._refresh_history).pack(side="left")
         columns = ("id", "created_at", "job_type", "backend", "model", "status", "summary")
         self.history_tree = ttk.Treeview(self.history_tab, columns=columns, show="headings", height=12)
@@ -722,8 +818,10 @@ class DesktopApp:
     def _build_form_and_result(self, parent: ttk.Frame, note: str):
         frame = ttk.Panedwindow(parent, orient="horizontal")
         frame.pack(fill="both", expand=True)
+        self._register_responsive_pane(frame, ratio=0.36, left_min=420, right_min=620)
         form_shell, form = self._build_scrollable_form(frame)
         result_frame = ttk.Frame(frame, style="Card.TFrame", padding=10)
+        self._register_glass(result_frame, GLASS_CARD_OPACITY)
         frame.add(form_shell, weight=2)
         frame.add(result_frame, weight=3)
         self._hint_label(form, note)
@@ -734,6 +832,7 @@ class DesktopApp:
 
     def _build_scrollable_form(self, parent):
         shell = tk.Frame(parent, bg=CARD_BG, highlightthickness=1, highlightbackground="#173966", highlightcolor="#173966")
+        self._register_glass(shell, GLASS_CARD_OPACITY)
         canvas = tk.Canvas(shell, bg=CARD_BG, bd=0, highlightthickness=0)
         scrollbar = tk.Scrollbar(
             shell,
@@ -802,6 +901,7 @@ class DesktopApp:
             bd=0,
             relief="flat",
         )
+        self._register_glass(widget, GLASS_PANEL_OPACITY)
         return widget
 
     def _hint_label(self, parent, text: str) -> None:
@@ -829,6 +929,7 @@ class DesktopApp:
             disabledforeground=TEXT_MUTED,
         )
         entry.pack(side="left", fill="x" if stretch else "none", expand=stretch)
+        self._register_glass(entry, GLASS_INPUT_OPACITY)
         if browse_command is not None:
             ttk.Button(row, text="浏览", command=browse_command).pack(side="left", padx=(8, 0))
         return entry
@@ -854,6 +955,7 @@ class DesktopApp:
             highlightcolor=GLOW_BLUE_SOFT,
         )
         entry.pack(side="left", fill="x" if stretch else "none", expand=stretch)
+        self._register_glass(entry, GLASS_INPUT_OPACITY)
         return entry
 
     def _labeled_readonly(self, parent, label: str, variable: tk.StringVar, *, stretch: bool = True, width: int = 48):
@@ -876,6 +978,7 @@ class DesktopApp:
             highlightcolor="#5bb7eb",
         )
         entry.pack(side="left", fill="x" if stretch else "none", expand=stretch)
+        self._register_glass(entry, GLASS_INPUT_OPACITY)
         return entry
 
     def _labeled_combo(self, parent, label: str, variable: tk.StringVar, values: list[str], *, stretch: bool = True, width: int = 48):
@@ -886,6 +989,7 @@ class DesktopApp:
         row.pack(fill="x", pady=(4, 0))
         combo = ttk.Combobox(row, textvariable=variable, values=values, state="readonly", width=width)
         combo.pack(side="left", fill="x" if stretch else "none", expand=stretch)
+        self._register_glass(combo, GLASS_INPUT_OPACITY)
         return combo
 
     def _labeled_check(self, parent, label: str, variable: tk.BooleanVar) -> None:
