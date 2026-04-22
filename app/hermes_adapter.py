@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+import yaml
+
 from .config import APP_NAME, APP_SLUG, HERMES_DATA_ROOT, HERMES_EXPORT_ROOT
 
 
@@ -42,6 +44,13 @@ class HermesEnvironmentStatus:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class HermesModelSettings:
+    default_model: str = ""
+    provider: str = "auto"
+    base_url: str = ""
+
+
 def _run_process(command: Iterable[str], *, timeout_sec: int = 20) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(command),
@@ -72,6 +81,63 @@ def hermes_data_root() -> Path:
     for child in ["skills", "sessions", "memories", "logs", "cron", "hooks"]:
         (root / child).mkdir(parents=True, exist_ok=True)
     return root
+
+
+def hermes_config_path() -> Path:
+    return hermes_data_root() / "config.yaml"
+
+
+def load_hermes_model_settings() -> HermesModelSettings:
+    config_path = hermes_config_path()
+    if not config_path.exists():
+        return HermesModelSettings()
+    try:
+        payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return HermesModelSettings()
+    model = payload.get("model") or {}
+    return HermesModelSettings(
+        default_model=str(model.get("default") or ""),
+        provider=str(model.get("provider") or "auto"),
+        base_url=str(model.get("base_url") or ""),
+    )
+
+
+def save_hermes_model_settings(settings: HermesModelSettings) -> Path:
+    config_path = hermes_config_path()
+    payload: dict = {}
+    if config_path.exists():
+        try:
+            payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            payload = {}
+    payload.setdefault("model", {})
+    payload["model"]["default"] = settings.default_model.strip()
+    payload["model"]["provider"] = settings.provider.strip() or "auto"
+    payload["model"]["base_url"] = settings.base_url.strip()
+    config_path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return config_path
+
+
+def detect_interactive_command(command: str) -> str | None:
+    tokens = shlex.split(command)
+    if tokens and tokens[0].lower() == "hermes":
+        tokens = tokens[1:]
+    if not tokens:
+        return "请输入有效命令。"
+    head = tokens[0].lower()
+    second = tokens[1].lower() if len(tokens) > 1 else ""
+    if head == "model":
+        return "hermes model 是交互式命令。请使用程序里的“模型设置”区域。"
+    if head in {"chat", "setup", "dashboard"}:
+        return f"hermes {head} 需要交互终端，当前命令框不支持。"
+    if head == "config" and second == "edit":
+        return "hermes config edit 会打开交互编辑器，当前命令框不支持。"
+    if head == "auth" and second in {"add", "login"}:
+        return f"hermes auth {second} 需要交互流程，当前命令框不支持。"
+    if head in {"login", "logout"}:
+        return f"hermes {head} 需要交互流程，当前命令框不支持。"
+    return None
 
 
 def docker_volume_path(path: Path) -> str:
@@ -275,6 +341,10 @@ def read_hermes_logs(tail: int = 200) -> tuple[bool, str, str]:
 
 
 def run_hermes_command(command: str, *, ensure_image: bool = True) -> tuple[bool, str, str]:
+    interactive_message = detect_interactive_command(command)
+    if interactive_message:
+        raise RuntimeError(interactive_message)
+
     ready, message = start_docker_desktop()
     if not ready:
         raise RuntimeError(message)

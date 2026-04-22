@@ -17,10 +17,13 @@ from .config import APP_NAME, APP_TAGLINE, HERMES_DATA_ROOT, ICON_ICO, ICON_PNG,
 from .executor import ExecutionError, LocalExecutor
 from .hardware import detect_hardware_profile
 from .hermes_adapter import (
+    HermesModelSettings,
+    load_hermes_model_settings,
     export_hermes_skill,
     inspect_hermes_environment,
     read_hermes_logs,
     run_hermes_command,
+    save_hermes_model_settings,
     start_docker_desktop,
     start_hermes_service,
     stop_hermes_service,
@@ -35,6 +38,7 @@ MODEL_CHOICES = [model.id for model in MODEL_CATALOG]
 RENAME_MODE_CHOICES = ["template", "replace", "fresh"]
 AI_SIZE_CHOICES = ["1024x1024", "1536x1024", "1024x1536"]
 AI_QUALITY_CHOICES = ["auto", "high", "medium", "low"]
+HERMES_PROVIDER_CHOICES = ["auto", "openrouter", "openai", "anthropic", "google", "azure"]
 BACKGROUND_SIZE = (1600, 900)
 BACKGROUND_FRAME_MS = 120
 
@@ -117,6 +121,9 @@ class DesktopApp:
         self.agent_command_var = tk.StringVar(value=self.app_settings.hermes_command or "hermes --help")
         self.agent_skill_path_var = tk.StringVar(value="")
         self.agent_data_root_var = tk.StringVar(value=str(HERMES_DATA_ROOT))
+        self.agent_model_default_var = tk.StringVar()
+        self.agent_model_provider_var = tk.StringVar(value="auto")
+        self.agent_model_base_url_var = tk.StringVar()
         current_bg = self.app_settings.background_gif_path or "默认赛博朋克背景"
         self.background_path_var = tk.StringVar(value=f"当前背景动图：{current_bg}")
 
@@ -126,6 +133,7 @@ class DesktopApp:
         self._refresh_background_animation()
         self._refresh_dashboard()
         self._refresh_history()
+        self._load_agent_model_settings()
         self._refresh_agent_status(silent=True)
         self.root.after(150, self._poll_queue)
         self.root.after(500, self._maybe_show_guide)
@@ -393,13 +401,23 @@ class DesktopApp:
         ttk.Label(form, text="程序 CLI 桥", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
         self._hint_label(form, "Hermes 可以通过 run_neonpilot_cli.ps1 直接调用程序内部功能。")
         ttk.Label(form, textvariable=self.agent_skill_path_var, style="Subtle.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(0, 8))
+        ttk.Label(form, text="模型设置", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
+        self._hint_label(form, "这里用于替代 hermes model 这种交互式命令。")
+        self._labeled_entry(form, "默认模型", self.agent_model_default_var)
+        self._labeled_combo(form, "提供方", self.agent_model_provider_var, HERMES_PROVIDER_CHOICES)
+        self._labeled_entry(form, "Base URL", self.agent_model_base_url_var)
+        model_row = ttk.Frame(form, style="Card.TFrame")
+        model_row.pack(fill="x", pady=(4, 8))
+        ttk.Button(model_row, text="读取模型配置", command=self._load_agent_model_settings).pack(side="left")
+        ttk.Button(model_row, text="保存模型配置", command=self._save_agent_model_settings, style="Accent.TButton").pack(side="left", padx=(8, 0))
         ttk.Label(form, text="Hermes 命令对话框", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
         self._labeled_entry(form, "命令", self.agent_command_var)
-        self._hint_label(form, "示例：hermes --help 或 hermes doctor")
+        self._hint_label(form, "示例：hermes --help、hermes doctor、hermes config show。交互式命令会提示改用对应面板。")
         custom_row = ttk.Frame(form, style="Card.TFrame")
         custom_row.pack(fill="x", pady=(4, 8))
         ttk.Button(custom_row, text="运行 help", command=self._run_agent_help).pack(side="left")
         ttk.Button(custom_row, text="运行 doctor", command=self._run_agent_doctor).pack(side="left", padx=(8, 0))
+        ttk.Button(custom_row, text="查看配置", command=self._run_agent_config_show).pack(side="left", padx=(8, 0))
         ttk.Button(custom_row, text="执行自定义命令", command=self._run_agent_custom, style="Accent.TButton").pack(side="left", padx=(8, 0))
         ttk.Label(right, text="Agent 控制台", style="CardTitle.TLabel").pack(anchor="w")
         self.agent_result_text = self._make_text(right, height=28)
@@ -852,6 +870,39 @@ class DesktopApp:
         path.mkdir(parents=True, exist_ok=True)
         os.startfile(str(path))
 
+    def _load_agent_model_settings(self) -> None:
+        settings = load_hermes_model_settings()
+        self.agent_model_default_var.set(settings.default_model)
+        self.agent_model_provider_var.set(settings.provider or "auto")
+        self.agent_model_base_url_var.set(settings.base_url)
+        self.status_var.set("已读取 Hermes 模型配置")
+
+    def _save_agent_model_settings(self) -> None:
+        default_model = self.agent_model_default_var.get().strip()
+        if not default_model:
+            messagebox.showwarning("缺少模型", "请先填写默认模型。")
+            return
+        settings = HermesModelSettings(
+            default_model=default_model,
+            provider=self.agent_model_provider_var.get().strip() or "auto",
+            base_url=self.agent_model_base_url_var.get().strip(),
+        )
+        path = save_hermes_model_settings(settings)
+        self.status_var.set("Hermes 模型配置已保存")
+        self.agent_result_text.delete("1.0", tk.END)
+        self.agent_result_text.insert(
+            "1.0",
+            "\n".join(
+                [
+                    "模型配置已保存。",
+                    f"config: {path}",
+                    f"default: {settings.default_model}",
+                    f"provider: {settings.provider}",
+                    f"base_url: {settings.base_url or '-'}",
+                ]
+            ),
+        )
+
     def _start_agent_docker(self) -> None:
         self._start_agent_action("启动 Docker", start_docker_desktop)
 
@@ -902,6 +953,9 @@ class DesktopApp:
 
     def _run_agent_doctor(self) -> None:
         self._start_agent_command("hermes doctor")
+
+    def _run_agent_config_show(self) -> None:
+        self._start_agent_command("hermes config show")
 
     def _run_agent_custom(self) -> None:
         command = self.agent_command_var.get().strip()

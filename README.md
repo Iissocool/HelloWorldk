@@ -61,6 +61,7 @@ Hermes 相关资料：
 - 停止 Hermes
 - 查看容器日志
 - 导出 Hermes Skill
+- 读取和保存 Hermes 模型配置
 - 直接在程序里执行 Hermes 命令
 
 ## CLI 命令桥
