@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import subprocess
@@ -32,8 +32,8 @@ def _decode_wsl_output(raw: bytes) -> str:
 
 def list_wsl_distros() -> list[str]:
     try:
-        completed = subprocess.run(["wsl.exe", "-l", "-v"], capture_output=True, check=False)
-    except FileNotFoundError:
+        completed = subprocess.run(["wsl.exe", "-l", "-v"], capture_output=True, check=False, timeout=12)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     if completed.returncode != 0:
         return []
@@ -54,23 +54,28 @@ def list_wsl_distros() -> list[str]:
     return distros
 
 
-def _run_wsl_command(distro: str, command: str) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        ["wsl.exe", "-d", distro, "bash", "-lc", command],
-        capture_output=True,
-        check=False,
-    )
+def _run_wsl_command(distro: str, command: str, *, timeout_sec: int = 12) -> subprocess.CompletedProcess[bytes]:
+    try:
+        return subprocess.run(
+            ["wsl.exe", "-d", distro, "bash", "-lc", command],
+            capture_output=True,
+            check=False,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stderr = (exc.stderr or b"") + b"\nWSL command timed out."
+        return subprocess.CompletedProcess(exc.cmd or [], 124, exc.stdout or b"", stderr)
 
 
 def inspect_hermes_environment(preferred_distro: str | None = None) -> HermesEnvironmentStatus:
     distros = list_wsl_distros()
     status = HermesEnvironmentStatus(wsl_available=True, usable_distros=distros)
     if not distros:
-        status.summary = "?????? WSL Linux ????"
+        status.summary = "未发现可用的 WSL Linux 发行版。"
         status.notes = [
-            "Hermes Agent ???? Linux?macOS ? WSL2?????? Windows?",
-            "???????? docker-desktop WSL??? Ubuntu ?????????",
-            "???????? Ubuntu for WSL???????? Hermes?",
+            "Hermes Agent 官方支持 Linux、macOS 与 WSL2，不支持原生 Windows。",
+            "这台机器当前只有 docker-desktop WSL，没有 Ubuntu 之类的可用发行版。",
+            "下一步需要先安装 Ubuntu for WSL，然后在其中安装 Hermes。",
         ]
         return status
 
@@ -81,18 +86,26 @@ def inspect_hermes_environment(preferred_distro: str | None = None) -> HermesEnv
     if version_check.returncode == 0 and output:
         status.hermes_available = True
         status.hermes_version = output.splitlines()[0].strip()
-        status.summary = f"Hermes ?? WSL ??? {selected} ????"
+        status.summary = f"Hermes 已在 WSL 发行版 {selected} 中可用。"
         status.notes = [
-            f"???????????{status.hermes_version}",
-            "?????????? help?doctor ????????",
-            "??? Hermes ???????? WSL ????????? prompt_toolkit ????????",
+            f"当前检测到的版本信息：{status.hermes_version}",
+            "现在可以在程序里运行 help、doctor 这类非交互命令。",
+            "完整的 Hermes 终端会话仍建议在 WSL 终端中运行，以保持 prompt_toolkit 的完整交互体验。",
         ]
         return status
 
-    status.summary = f"???? WSL ??? {selected}?????? Hermes?"
+    if version_check.returncode == 124:
+        status.summary = f"已检测到 WSL 发行版 {selected}，但它还没有完成首启初始化。"
+        status.notes = [
+            "这通常表示 Ubuntu 第一次启动仍在等待创建 Linux 用户或完成发行版初始化。",
+            "先手动打开一次 Ubuntu，完成首启设置，再回到程序里刷新 Agent。",
+        ]
+        return status
+
+    status.summary = f"已检测到 WSL 发行版 {selected}，但尚未安装 Hermes。"
     status.notes = [
-        "???? Ubuntu WSL ??? Hermes ???????",
-        "????????????? Agent?????????????",
+        "可以先在 Ubuntu WSL 中运行 Hermes 官方安装脚本。",
+        "装好后回到程序里点击“刷新 Agent”即可接管检测与命令执行。",
     ]
     return status
 
@@ -104,7 +117,7 @@ def run_hermes_command(command: str, *, distro: str | None = None) -> tuple[bool
     if not status.hermes_available:
         raise RuntimeError(status.summary + "\n" + "\n".join(status.notes))
 
-    completed = _run_wsl_command(status.selected_distro, f"source ~/.bashrc >/dev/null 2>&1; {command}")
+    completed = _run_wsl_command(status.selected_distro, f"source ~/.bashrc >/dev/null 2>&1; {command}", timeout_sec=20)
     stdout = _decode_wsl_output(completed.stdout).replace("\x00", "")
     stderr = _decode_wsl_output(completed.stderr).replace("\x00", "")
     return completed.returncode == 0, stdout, stderr
