@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import sys
@@ -8,13 +8,34 @@ from pathlib import Path
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 BUNDLE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 PROJECT_ROOT = Path(sys.executable).resolve().parent if IS_FROZEN else Path(__file__).resolve().parents[1]
-WORKSPACE_ROOT = Path(os.environ.get("GEMINI_ROOT", PROJECT_ROOT))
+
+
+def _existing(path: Path) -> bool:
+    return path.exists()
+
+
+def _discover_workspace_root() -> Path:
+    env_root = os.environ.get("GEMINI_ROOT")
+    candidates: list[Path] = []
+    if env_root:
+        candidates.append(Path(env_root))
+    candidates.extend([PROJECT_ROOT, PROJECT_ROOT.parent, PROJECT_ROOT.parent.parent, Path("W:/gemini")])
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if (candidate / "models" / ".u2net").exists() or (candidate / "runtime" / "rembg").exists():
+            return candidate
+    return Path(env_root) if env_root else PROJECT_ROOT
 
 
 def _workspace_or_bundle(path_from_workspace: Path, path_from_bundle: Path) -> Path:
-    return path_from_workspace if path_from_workspace.exists() else path_from_bundle
+    return path_from_workspace if _existing(path_from_workspace) else path_from_bundle
 
 
+WORKSPACE_ROOT = _discover_workspace_root()
 RUNTIME_ROOT = Path(
     os.environ.get(
         "REMBG_RUNTIME_DIR",

@@ -51,7 +51,7 @@
 
 ### 1. 克隆项目
 
-由于 GitHub 仓库名结尾带 `.`，Windows 默认目录名不太友好，建议克隆时显式指定本地目录名：
+直接克隆仓库即可：
 
 ```powershell
 git clone https://github.com/Iissocool/CutCanvas.git CutCanvas
@@ -134,23 +134,34 @@ powershell -ExecutionPolicy Bypass -File .\run_self_test.ps1 --input .\some.jpg 
 - 详细使用手册：`docs/桌面程序详细使用手册.md`
 - 架构说明：`docs/architecture.md`
 
+## 品牌与打包
 
-
-## ?????
-
-?????????????
+项目当前已经包含以下品牌资源：
 
 - `assets/branding/cutcanvas-icon.png`
 - `assets/branding/cutcanvas.ico`
 - `assets/branding/cutcanvas-splash.png`
 
-?? Windows ????????
+### Windows 便携版与安装包构建
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
 ```
 
-?????
+默认输出：
 
-- ????`dist/CutCanvas/CutCanvas.exe`
-- ????`dist/installer/CutCanvas-Setup.exe`
+- 便携版：`dist/CutCanvas/CutCanvas.exe`
+- 安装包：`dist/installer/CutCanvas-Setup.exe`
+
+### 同步到 W:\gemini 工作区
+
+如果你要把最新打包产物同步到本机工作区：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy_w_gemini.ps1
+```
+
+默认会同步到：
+
+- `W:\gemini\apps\CutCanvas\CutCanvas.exe`
+- `W:\gemini\apps\CutCanvas\installer\CutCanvas-Setup.exe`
