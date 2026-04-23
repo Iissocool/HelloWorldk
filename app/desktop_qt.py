@@ -593,17 +593,27 @@ class NeonPilotQtWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         status_card = CardFrame("Agent 状态")
-        form = QFormLayout()
+        status_card.setMaximumHeight(150)
+        chip_row = QHBoxLayout()
+        chip_row.setSpacing(12)
         self.agent_docker = QLineEdit(); self.agent_docker.setReadOnly(True)
         self.agent_hermes = QLineEdit(); self.agent_hermes.setReadOnly(True)
         self.agent_chat = QLineEdit(); self.agent_chat.setReadOnly(True)
         self.agent_interactive = QLineEdit(); self.agent_interactive.setReadOnly(True)
-        form.addRow("Docker", self.agent_docker)
-        form.addRow("Hermes Gateway", self.agent_hermes)
-        form.addRow("对话能力", self.agent_chat)
-        form.addRow("交互式 CLI", self.agent_interactive)
-        status_card.body().addLayout(form)
-        self.agent_status_log = QPlainTextEdit(); self.agent_status_log.setReadOnly(True); self.agent_status_log.setMaximumHeight(140)
+        for label_text, widget in [
+            ("Docker", self.agent_docker),
+            ("Gateway", self.agent_hermes),
+            ("对话", self.agent_chat),
+            ("交互", self.agent_interactive),
+        ]:
+            cell = QVBoxLayout()
+            label = QLabel(label_text)
+            label.setObjectName("MutedLabel")
+            cell.addWidget(label)
+            cell.addWidget(widget)
+            chip_row.addLayout(cell, 1)
+        status_card.body().addLayout(chip_row)
+        self.agent_status_log = QPlainTextEdit(); self.agent_status_log.setReadOnly(True); self.agent_status_log.setMaximumHeight(52)
         status_card.body().addWidget(self.agent_status_log)
         status_buttons = QHBoxLayout()
         for text, cmd in [("刷新状态", "status"), ("一键准备 Agent", "agent-ready"), ("查看日志", "logs")]:
@@ -620,19 +630,18 @@ class NeonPilotQtWindow(QMainWindow):
         self.agent_mode = QComboBox()
         self.agent_mode.addItems(["workflow", "hermes", "docker", "container"])
         self.agent_mode.currentTextChanged.connect(self._update_agent_mode_help)
-        terminal_card.body().addWidget(QLabel("终端模式"))
-        terminal_card.body().addWidget(self.agent_mode)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("终端模式"))
+        mode_row.addWidget(self.agent_mode, 1)
+        terminal_card.body().addLayout(mode_row)
         self.agent_help = QLabel("")
         self.agent_help.setWordWrap(True)
         self.agent_help.setObjectName("MutedLabel")
         terminal_card.body().addWidget(self.agent_help)
         self.agent_terminal = QPlainTextEdit(); self.agent_terminal.setReadOnly(True)
-        self.agent_terminal.setMinimumHeight(380)
+        self.agent_terminal.setMinimumHeight(560)
         terminal_card.body().addWidget(self.agent_terminal)
-        self.agent_session = QLineEdit(self.app_settings.agent_session_name)
-        terminal_card.body().addWidget(QLabel("当前会话名"))
-        terminal_card.body().addWidget(self.agent_session)
-        self.agent_input = QPlainTextEdit(); self.agent_input.setMaximumHeight(120)
+        self.agent_input = QPlainTextEdit(); self.agent_input.setMaximumHeight(140)
         terminal_card.body().addWidget(self.agent_input)
         terminal_buttons = QHBoxLayout()
         send_btn = QPushButton("发送命令")
@@ -728,16 +737,15 @@ class NeonPilotQtWindow(QMainWindow):
         self.agent_hermes.setText("已运行" if service_ok else "未运行")
         self.agent_chat.setText("可对话" if chat_ok else "需先配置 API")
         self.agent_interactive.setText("使用原生终端" if service_ok else "服务未就绪")
-        lines = [
-            f"Docker daemon: {docker_ok}",
-            f"Hermes service: {service_ok}",
-            f"Inference ready: {chat_ok}",
-            f"Container: {payload.get('container_name', '')}",
-            f"Data root: {payload.get('data_root', '')}",
-            f"Version: {payload.get('version_text', '')}",
-            f"Hint: {payload.get('interactive_shell_hint', '')}",
-        ]
-        self.agent_status_log.setPlainText("\n".join(lines))
+        self.agent_status_log.setPlainText(
+            " · ".join(
+                [
+                    f"Container: {payload.get('container_name', '')}",
+                    f"Data: {payload.get('data_root', '')}",
+                    f"Version: {payload.get('version_text', '')}",
+                ]
+            )
+        )
 
     def _update_agent_mode_help(self, mode: str) -> None:
         help_map = {
@@ -758,7 +766,7 @@ class NeonPilotQtWindow(QMainWindow):
     def _open_native_hermes(self) -> None:
         ok, message = launch_interactive_hermes_terminal()
         if ok:
-            self.agent_terminal.appendPlainText(f"[native]\\n{message}\\n")
+            self.agent_terminal.appendPlainText(f"[native]\n{message}\n")
             self._set_ready("已打开原生 Hermes 终端")
         else:
             self._show_error(message)
@@ -846,8 +854,6 @@ class NeonPilotQtWindow(QMainWindow):
         text = self.agent_input.toPlainText().strip()
         if not text:
             return
-        save_app_settings(AppSettings(agent_session_name=self.agent_session.text().strip() or "neonpilot"))
-        self.app_settings = load_app_settings()
         self._execute_agent_terminal_command(text)
         self.agent_input.clear()
 
@@ -902,6 +908,7 @@ class NeonPilotQtWindow(QMainWindow):
                         "  workflow model test --model <id> --base-url <url> --api-key <key>",
                         "  workflow run <bridge command>",
                         "直接输入自然语言时，会转成 Hermes chat -q 查询。",
+                        "交互式命令请用 打开原生 Hermes。",
                     ]
                 ),
                 "stderr": "",
@@ -954,7 +961,7 @@ class NeonPilotQtWindow(QMainWindow):
         try:
             ok, stdout, stderr = run_hermes_query(
                 stripped,
-                session_name=self.agent_session.text().strip() or "neonpilot",
+                session_name="neonpilot",
             )
             return {"ok": ok, "stdout": stdout, "stderr": stderr}
         except Exception as exc:  # noqa: BLE001

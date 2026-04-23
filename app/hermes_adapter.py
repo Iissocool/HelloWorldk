@@ -709,13 +709,20 @@ def launch_interactive_hermes_terminal(*, command: str = "hermes") -> tuple[bool
     )
     try:
         subprocess.Popen(
-            ["cmd.exe", "/k", terminal_command],
-            creationflags=DETACHED_PROCESS,
+            [
+                "cmd.exe",
+                "/c",
+                "start",
+                "NeonPilot Hermes",
+                "cmd.exe",
+                "/k",
+                terminal_command,
+            ],
             close_fds=True,
         )
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
-    return True, "已打开原生终端。这个窗口支持 hermes model、hermes --tui 等交互式命令。"
+    return True, "已弹出原生 Hermes 终端窗口。请在新窗口里直接使用 hermes model、hermes --tui 等交互式命令。"
 
 
 def export_hermes_skill(project_root: Path, runner_script: Path, *, export_root: Path | None = None) -> Path:
