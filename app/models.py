@@ -170,19 +170,24 @@ class BackgroundReplaceRunRequest(BaseModel):
     output_dir: str
     subject_name: str
     background_prompt: str
+    background_style: str = "custom"
     recurse: bool = True
     overwrite: bool = False
+    preserve_structure: bool = True
     matt_model: str = "bria-rmbg"
     matt_backend: BackendId = "auto"
+    retry_count: int = 1
 
 
 class PhotoshopBatchRequest(BaseModel):
     template_path: str
     droplet_path: str
     input_dir: str
+    output_dir: str = ""
     photoshop_path: str = ""
     template_wait_sec: int = 8
     timeout_sec: int = 1800
+    collect_wait_sec: int = 15
     close_photoshop_when_done: bool = False
 
 

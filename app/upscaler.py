@@ -1,9 +1,12 @@
 ﻿from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+
+from .config import UPSCALE_BINARY
 
 
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.bmp', '.webp', '.tif', '.tiff'}
@@ -15,6 +18,7 @@ class UpscaleSummary:
     output_path: str
     scale: int
     mode: str
+    engine: str
 
 
 def image_paths_from_dir(input_dir: Path, recurse: bool) -> list[Path]:
@@ -26,7 +30,42 @@ def image_paths_from_dir(input_dir: Path, recurse: bool) -> list[Path]:
     )
 
 
-def upscale_image(input_path: Path, output_path: Path, *, scale: int = 2, mode: str = 'quality') -> UpscaleSummary:
+def external_upscale_available() -> bool:
+    return UPSCALE_BINARY.exists()
+
+
+def _upscale_with_realesrgan(input_path: Path, output_path: Path, *, scale: int, mode: str) -> UpscaleSummary:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tile_size = '200' if mode == 'quality' else '128'
+    command = [
+        str(UPSCALE_BINARY),
+        '-i', str(input_path),
+        '-o', str(output_path),
+        '-s', str(scale),
+        '-f', output_path.suffix.lower().lstrip('.') or 'png',
+        '-t', tile_size,
+        '-g', '0',
+    ]
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError((completed.stderr or completed.stdout or 'Real-ESRGAN 执行失败。').strip())
+    return UpscaleSummary(
+        input_path=str(input_path),
+        output_path=str(output_path),
+        scale=scale,
+        mode=mode,
+        engine='realesrgan-ncnn-vulkan',
+    )
+
+
+def _upscale_with_internal_fallback(input_path: Path, output_path: Path, *, scale: int = 2, mode: str = 'quality') -> UpscaleSummary:
     image = Image.open(input_path)
     image = ImageOps.exif_transpose(image)
     if image.mode not in {'RGB', 'RGBA'}:
@@ -63,4 +102,11 @@ def upscale_image(input_path: Path, output_path: Path, *, scale: int = 2, mode: 
         output_path=str(output_path),
         scale=scale,
         mode=mode,
+        engine='internal-fallback',
     )
+
+
+def upscale_image(input_path: Path, output_path: Path, *, scale: int = 2, mode: str = 'quality') -> UpscaleSummary:
+    if external_upscale_available():
+        return _upscale_with_realesrgan(input_path, output_path, scale=scale, mode=mode)
+    return _upscale_with_internal_fallback(input_path, output_path, scale=scale, mode=mode)

@@ -561,11 +561,15 @@ class NeonPilotQtWindow(QMainWindow):
         layout.addRow("Photoshop", row)
         self.ps_input, row = self._path_row("选择素材目录", folder=True)
         layout.addRow("素材目录", row)
+        self.ps_output, row = self._path_row("选择结果收集目录", folder=True)
+        layout.addRow("结果收集目录", row)
         self.ps_wait = QSpinBox(); self.ps_wait.setRange(0, 120); self.ps_wait.setValue(8)
         self.ps_timeout = QSpinBox(); self.ps_timeout.setRange(0, 7200); self.ps_timeout.setValue(1800)
+        self.ps_collect_wait = QSpinBox(); self.ps_collect_wait.setRange(0, 600); self.ps_collect_wait.setValue(15)
         self.ps_close = QCheckBox("执行完成后自动关闭 Photoshop")
         layout.addRow("模板等待秒数", self.ps_wait)
         layout.addRow("Droplet 超时秒数", self.ps_timeout)
+        layout.addRow("结果收集等待秒数", self.ps_collect_wait)
         layout.addRow(self.ps_close)
         btn = QPushButton("开始 Photoshop 套图")
         btn.clicked.connect(self._run_ps_batch)
@@ -614,76 +618,77 @@ class NeonPilotQtWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         terminal_card = CardFrame("Agent 工作流终端")
-        terminal_hint = QLabel("这里直接输入工作流命令或自然语言。固定的 Docker / Hermes / 容器模式已移除，主视图只保留可执行工作流。")
-        terminal_hint.setWordWrap(True)
-        terminal_hint.setObjectName("MutedLabel")
-        terminal_card.body().addWidget(terminal_hint)
         self.agent_terminal = QPlainTextEdit(); self.agent_terminal.setReadOnly(True)
-        self.agent_terminal.setMinimumHeight(620)
+        self.agent_terminal.setMinimumHeight(700)
         terminal_card.body().addWidget(self.agent_terminal)
-        self.agent_input = QPlainTextEdit(); self.agent_input.setMaximumHeight(120)
-        self.agent_input.setPlaceholderText("例如：workflow help  或  workflow run upscale-ps --input-dir \"W:\\images\" --upscale-dir \"W:\\upscaled\" --template \"C:\\...psd\" --droplet \"C:\\...exe\"")
-        terminal_card.body().addWidget(self.agent_input)
-        terminal_buttons = QHBoxLayout()
-        send_btn = QPushButton("发送命令")
-        send_btn.clicked.connect(self._run_agent_terminal)
-        clear_btn = QPushButton("清空终端")
-        clear_btn.clicked.connect(self.agent_terminal.clear)
-        terminal_buttons.addWidget(send_btn); terminal_buttons.addWidget(clear_btn)
-        terminal_card.body().addLayout(terminal_buttons)
-        layout.addWidget(terminal_card, 1)
 
-        footer_card = CardFrame("Agent 快捷组件")
-        status_row = QHBoxLayout()
-        status_row.setSpacing(10)
+        meta_toolbar = QHBoxLayout()
+        meta_toolbar.setSpacing(8)
         self.agent_docker_badge = QLabel("Docker: --"); self.agent_docker_badge.setObjectName("StatusPill")
         self.agent_hermes_badge = QLabel("Gateway: --"); self.agent_hermes_badge.setObjectName("StatusPill")
         self.agent_chat_badge = QLabel("对话: --"); self.agent_chat_badge.setObjectName("StatusPill")
         for badge in [self.agent_docker_badge, self.agent_hermes_badge, self.agent_chat_badge]:
-            badge.setMinimumHeight(34)
+            badge.setFixedHeight(32)
+            badge.setMinimumWidth(120)
             badge.setAlignment(Qt.AlignCenter)
-            status_row.addWidget(badge)
-        footer_card.body().addLayout(status_row)
-
+            meta_toolbar.addWidget(badge)
         self.agent_status_log = QLabel("--")
         self.agent_status_log.setObjectName("MutedLabel")
-        self.agent_status_log.setWordWrap(True)
-        footer_card.body().addWidget(self.agent_status_log)
+        self.agent_status_log.setWordWrap(False)
+        self.agent_status_log.setMinimumWidth(320)
+        meta_toolbar.addWidget(self.agent_status_log, 1)
+        terminal_card.body().addLayout(meta_toolbar)
 
-        api_grid = QGridLayout()
-        api_grid.setHorizontalSpacing(10)
-        api_grid.setVerticalSpacing(10)
+        composer_toolbar = QHBoxLayout()
+        composer_toolbar.setSpacing(8)
         self.agent_provider = QComboBox()
+        self.agent_provider.setFixedWidth(120)
         self.agent_provider.addItems(["auto", "openai", "openrouter", "gemini", "anthropic", "xai", "ollama-cloud", "zai", "kimi-coding", "minimax", "nvidia"])
         self.agent_model = QLineEdit()
+        self.agent_model.setFixedWidth(180)
+        self.agent_model.setPlaceholderText("模型")
         self.agent_base_url = QLineEdit()
-        self.agent_base_url.setPlaceholderText("可选：OpenAI 兼容地址")
+        self.agent_base_url.setPlaceholderText("Base URL")
+        self.agent_base_url.setMinimumWidth(240)
         self.agent_api_key = QLineEdit()
         self.agent_api_key.setEchoMode(QLineEdit.Password)
-        self.agent_api_key.setPlaceholderText("仅在需要时填写新的 API Key")
-        api_grid.addWidget(QLabel("提供方"), 0, 0)
-        api_grid.addWidget(self.agent_provider, 0, 1)
-        api_grid.addWidget(QLabel("模型"), 0, 2)
-        api_grid.addWidget(self.agent_model, 0, 3)
-        api_grid.addWidget(QLabel("Base URL"), 1, 0)
-        api_grid.addWidget(self.agent_base_url, 1, 1, 1, 2)
-        api_grid.addWidget(QLabel("API Key"), 1, 3)
-        api_grid.addWidget(self.agent_api_key, 1, 4)
-        footer_card.body().addLayout(api_grid)
+        self.agent_api_key.setPlaceholderText("API Key")
+        self.agent_api_key.setMinimumWidth(220)
+        save_config_btn = QPushButton("保存")
+        save_config_btn.setFixedWidth(84)
+        save_config_btn.clicked.connect(self._save_agent_quick_config)
+        test_api_btn = QPushButton("测试")
+        test_api_btn.setFixedWidth(84)
+        test_api_btn.clicked.connect(self._test_agent_quick_config)
+        composer_toolbar.addWidget(self.agent_provider)
+        composer_toolbar.addWidget(self.agent_model)
+        composer_toolbar.addWidget(self.agent_base_url, 1)
+        composer_toolbar.addWidget(self.agent_api_key)
+        composer_toolbar.addWidget(save_config_btn)
+        composer_toolbar.addWidget(test_api_btn)
+        terminal_card.body().addLayout(composer_toolbar)
 
-        footer_buttons = QHBoxLayout()
-        for text, handler in [
-            ("刷新状态", self.refresh_agent_status),
-            ("一键准备 Agent", lambda: self._execute_agent_terminal_command("agent-ready")),
-            ("保存模型/API", self._save_agent_quick_config),
-            ("测试 API", self._test_agent_quick_config),
-            ("查看日志", lambda: self._execute_agent_terminal_command("logs")),
-        ]:
-            btn = QPushButton(text)
-            btn.clicked.connect(handler)
-            footer_buttons.addWidget(btn)
-        footer_card.body().addLayout(footer_buttons)
-        layout.addWidget(footer_card)
+        self.agent_input = QPlainTextEdit(); self.agent_input.setMaximumHeight(120)
+        self.agent_input.setPlaceholderText("例如：workflow help  或  workflow run upscale-ps --input-dir \"W:\\images\" --upscale-dir \"W:\\upscaled\" --ps-output-dir \"W:\\final\" --template \"C:\\...psd\" --droplet \"C:\\...exe\"")
+        terminal_card.body().addWidget(self.agent_input)
+        terminal_buttons = QHBoxLayout()
+        refresh_btn = QPushButton("刷新")
+        refresh_btn.clicked.connect(self.refresh_agent_status)
+        ready_btn = QPushButton("准备")
+        ready_btn.clicked.connect(lambda: self._execute_agent_terminal_command("agent-ready"))
+        logs_btn = QPushButton("日志")
+        logs_btn.clicked.connect(lambda: self._execute_agent_terminal_command("logs"))
+        send_btn = QPushButton("发送命令")
+        send_btn.clicked.connect(self._run_agent_terminal)
+        clear_btn = QPushButton("清空终端")
+        clear_btn.clicked.connect(self.agent_terminal.clear)
+        terminal_buttons.addWidget(refresh_btn)
+        terminal_buttons.addWidget(ready_btn)
+        terminal_buttons.addWidget(logs_btn)
+        terminal_buttons.addWidget(send_btn)
+        terminal_buttons.addWidget(clear_btn)
+        terminal_card.body().addLayout(terminal_buttons)
+        layout.addWidget(terminal_card, 1)
         return page
 
     def _build_history_page(self) -> QWidget:
@@ -882,7 +887,7 @@ class NeonPilotQtWindow(QMainWindow):
             self.ai_result.appendPlainText("\n生成文件:\n" + "\n".join(result.artifacts))
 
     def _run_ps_batch(self) -> None:
-        request = PhotoshopBatchRequest(template_path=self.ps_template.text(), droplet_path=self.ps_droplet.text(), input_dir=self.ps_input.text(), photoshop_path=self.ps_exe.text(), template_wait_sec=self.ps_wait.value(), timeout_sec=self.ps_timeout.value(), close_photoshop_when_done=self.ps_close.isChecked())
+        request = PhotoshopBatchRequest(template_path=self.ps_template.text(), droplet_path=self.ps_droplet.text(), input_dir=self.ps_input.text(), output_dir=self.ps_output.text(), photoshop_path=self.ps_exe.text(), template_wait_sec=self.ps_wait.value(), timeout_sec=self.ps_timeout.value(), collect_wait_sec=self.ps_collect_wait.value(), close_photoshop_when_done=self.ps_close.isChecked())
         self._set_busy("正在执行 Photoshop 套图")
         self._run_async(lambda: self.executor.run_photoshop_batch(request), lambda result: self._handle_execution_result(self.ps_log, result), self._show_exec_error)
 
@@ -976,8 +981,9 @@ class NeonPilotQtWindow(QMainWindow):
                         "  logs",
                         "  workflow model show",
                         "  workflow model set --model <id> --provider <name> --base-url <url> --api-key <key>",
-                        "  workflow run upscale-ps --input-dir <dir> --upscale-dir <dir> --template <psd> --droplet <exe>",
-                        "  workflow run background-refresh --input-dir <dir> --output-dir <dir> --subject <主体> --background <背景意愿>",
+                        "  workflow run upscale-ps --input-dir <dir> --upscale-dir <dir> --ps-output-dir <dir> --template <psd> --droplet <exe>",
+                        "  workflow run background-refresh --input-dir <dir> --output-dir <dir> --subject <主体> --background <背景意愿> --style <预设>",
+                        "  背景风格预设: custom / clean-ecommerce / cream-home / minimal-bathroom / outdoor-sunlit / luxury-dark",
                         "  workflow run <bridge command>",
                         "直接输入自然语言时，会转成 Hermes chat -q 查询。",
                     ]
@@ -1044,6 +1050,7 @@ class NeonPilotQtWindow(QMainWindow):
             mapping = {
                 "--input-dir": "",
                 "--upscale-dir": "",
+                "--ps-output-dir": "",
                 "--template": "",
                 "--droplet": "",
                 "--photoshop": "",
@@ -1090,6 +1097,8 @@ class NeonPilotQtWindow(QMainWindow):
                 "--input-dir",
                 mapping["--upscale-dir"],
             ]
+            if mapping["--ps-output-dir"]:
+                ps_argv.extend(["--output-dir", mapping["--ps-output-dir"]])
             if mapping["--photoshop"]:
                 ps_argv.extend(["--photoshop", mapping["--photoshop"]])
             if flags["--close-photoshop"]:
@@ -1114,10 +1123,12 @@ class NeonPilotQtWindow(QMainWindow):
                 "--output-dir": "",
                 "--subject": "",
                 "--background": "",
+                "--style": "custom",
                 "--matt-model": "bria-rmbg",
                 "--matt-backend": "auto",
+                "--retry": "1",
             }
-            flags = {"--recurse": False, "--overwrite": False}
+            flags = {"--recurse": False, "--overwrite": False, "--flatten": False}
             key = None
             for token in argv[1:]:
                 if token in mapping:
@@ -1143,12 +1154,17 @@ class NeonPilotQtWindow(QMainWindow):
                     mapping["--subject"],
                     "--background",
                     mapping["--background"],
+                    "--style",
+                    mapping["--style"],
                     "--matt-model",
                     mapping["--matt-model"],
                     "--matt-backend",
                     mapping["--matt-backend"],
+                    "--retry",
+                    mapping["--retry"],
                     *(["--recurse"] if flags["--recurse"] else []),
                     *(["--overwrite"] if flags["--overwrite"] else []),
+                    *(["--flatten"] if flags["--flatten"] else []),
                 ]
             )
             return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2), "stderr": ""}

@@ -163,18 +163,23 @@ def build_parser() -> argparse.ArgumentParser:
     background_refresh.add_argument("--output-dir", required=True)
     background_refresh.add_argument("--subject", required=True)
     background_refresh.add_argument("--background", required=True)
+    background_refresh.add_argument("--style", default="custom")
     background_refresh.add_argument("--recurse", action="store_true")
     background_refresh.add_argument("--overwrite", action="store_true")
+    background_refresh.add_argument("--flatten", action="store_true")
     background_refresh.add_argument("--matt-model", default="bria-rmbg")
     background_refresh.add_argument("--matt-backend", default="auto")
+    background_refresh.add_argument("--retry", type=int, default=1)
 
     ps_batch = sub.add_parser("ps-batch", help="Run Photoshop PSD + Droplet batch workflow")
     ps_batch.add_argument("--template", required=True)
     ps_batch.add_argument("--droplet", required=True)
     ps_batch.add_argument("--input-dir", required=True)
+    ps_batch.add_argument("--output-dir", default="")
     ps_batch.add_argument("--photoshop", default="")
     ps_batch.add_argument("--template-wait", type=int, default=8)
     ps_batch.add_argument("--timeout", type=int, default=1800)
+    ps_batch.add_argument("--collect-wait", type=int, default=15)
     ps_batch.add_argument("--close-photoshop", action="store_true")
     return parser
 
@@ -321,10 +326,13 @@ def execute_namespace(args: argparse.Namespace) -> tuple[bool, dict]:
                     output_dir=args.output_dir,
                     subject_name=args.subject,
                     background_prompt=args.background,
+                    background_style=args.style,
                     recurse=args.recurse,
                     overwrite=args.overwrite,
+                    preserve_structure=not args.flatten,
                     matt_model=args.matt_model,
                     matt_backend=args.matt_backend,
+                    retry_count=args.retry,
                 ),
                 log_history=False,
             )
@@ -335,9 +343,11 @@ def execute_namespace(args: argparse.Namespace) -> tuple[bool, dict]:
                     template_path=args.template,
                     droplet_path=args.droplet,
                     input_dir=args.input_dir,
+                    output_dir=args.output_dir,
                     photoshop_path=args.photoshop,
                     template_wait_sec=args.template_wait,
                     timeout_sec=args.timeout,
+                    collect_wait_sec=args.collect_wait,
                     close_photoshop_when_done=args.close_photoshop,
                 ),
                 log_history=False,

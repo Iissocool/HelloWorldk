@@ -11,6 +11,8 @@ from PIL import Image
 
 from .ai_image import generate_images, load_ai_settings, test_ai_provider
 from .background_replace import (
+    BACKGROUND_STYLE_PRESETS,
+    build_output_path,
     build_background_prompt,
     choose_generation_size,
     composite_subject_over_background,
@@ -48,7 +50,7 @@ from .runtime_manager import (
     runtime_component_installed,
 )
 from .selection import analyze_image, choose_category, choose_model
-from .upscaler import image_paths_from_dir as upscale_image_paths_from_dir, upscale_image
+from .upscaler import external_upscale_available, image_paths_from_dir as upscale_image_paths_from_dir, upscale_image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -235,6 +237,15 @@ class LocalExecutor:
             and path.suffix.lower() in IMAGE_SUFFIXES
             and (include_generated or not self._should_skip_generated(path))
         )
+
+    def _collect_image_outputs(self, output_dir: Path) -> list[str]:
+        if not output_dir.exists() or not output_dir.is_dir():
+            return []
+        return [
+            str(path)
+            for path in sorted(output_dir.rglob("*"))
+            if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+        ]
 
     def _build_single_command(self, backend: str, request: SingleRunRequest) -> list[str]:
         normalized = "directml" if backend == "amd" else backend
@@ -669,6 +680,7 @@ class LocalExecutor:
         image_count = image_count_in_directory(input_dir)
         if image_count == 0:
             raise ExecutionError("当前素材目录里没有可处理的图片。")
+        output_dir = Path(request.output_dir) if request.output_dir.strip() else None
 
         photoshop_path = Path(request.photoshop_path) if request.photoshop_path.strip() else detect_photoshop_executable()
         open_command, open_source = open_template_in_photoshop(template_path, photoshop_path)
@@ -683,6 +695,7 @@ class LocalExecutor:
         except subprocess.TimeoutExpired as exc:
             stdout = exc.stdout or ""
             stderr = exc.stderr or ""
+            artifacts = self._collect_image_outputs(output_dir) if output_dir else []
             result = ExecutionResult(
                 ok=True,
                 command=[str(droplet_path), str(input_dir)],
@@ -693,6 +706,8 @@ class LocalExecutor:
                         f"打开命令：{' '.join(open_command)}",
                         f"素材目录已发送给 Droplet：{input_dir}",
                         f"图片数量：{image_count}",
+                        (f"结果收集目录：{output_dir}" if output_dir else ""),
+                        (f"当前已收集结果数：{len(artifacts)}" if output_dir else ""),
                         "Droplet 已启动，当前仍在 Photoshop 中继续执行。",
                         (
                             "已跳过自动关闭 Photoshop，因为 Droplet 还在运行。"
@@ -707,6 +722,7 @@ class LocalExecutor:
                 backend_used="photoshop-droplet",
                 model_used="photoshop-template",
                 summary=f"Photoshop 套图已启动，{image_count} 张图片正在处理。",
+                artifacts=artifacts,
             )
             if log_history:
                 self._log_job(
@@ -725,8 +741,18 @@ class LocalExecutor:
             f"打开命令：{' '.join(open_command)}",
             f"素材目录已发送给 Droplet：{input_dir}",
             f"图片数量：{image_count}",
-            "最终输出目录由该 Droplet 绑定的 Photoshop 动作决定。",
         ]
+        artifacts: list[str] = []
+        if output_dir:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            stdout_lines.append(f"结果收集目录：{output_dir}")
+            if request.collect_wait_sec > 0:
+                import time
+                time.sleep(request.collect_wait_sec)
+            artifacts = self._collect_image_outputs(output_dir)
+            stdout_lines.append(f"已收集结果数：{len(artifacts)}")
+        else:
+            stdout_lines.append("未指定结果收集目录，最终输出仍由该 Droplet 绑定的 Photoshop 动作决定。")
         if request.close_photoshop_when_done:
             closed, close_message = close_photoshop_processes()
             stdout_lines.append(close_message)
@@ -745,6 +771,7 @@ class LocalExecutor:
                 if completed is not None and completed.returncode == 0
                 else f"Photoshop 套图已启动，已发送 {image_count} 张图片。"
             ),
+            artifacts=artifacts,
         )
         if log_history:
             self._log_job(
@@ -771,6 +798,7 @@ class LocalExecutor:
 
         rows: list[dict[str, str]] = []
         stdout_lines: list[str] = []
+        engine_label = "realesrgan-ncnn-vulkan" if external_upscale_available() else "internal-fallback"
         for index, input_path in enumerate(images, start=1):
             relative = input_path.relative_to(input_dir)
             output_path = output_dir / relative
@@ -780,7 +808,7 @@ class LocalExecutor:
                         "input": str(input_path),
                         "output": str(output_path),
                         "model": f"upscale:{request.mode}",
-                        "backend": "internal-pillow",
+                        "backend": engine_label,
                         "status": "skipped",
                         "reason": "existing output",
                     }
@@ -793,12 +821,12 @@ class LocalExecutor:
                     "input": summary.input_path,
                     "output": summary.output_path,
                     "model": f"upscale:{request.mode}",
-                    "backend": "internal-pillow",
+                    "backend": summary.engine,
                     "status": "ok",
                     "reason": f"{request.scale}x",
                 }
             )
-            stdout_lines.append(f"[{index}/{len(images)}] ok {relative} -> {request.scale}x")
+            stdout_lines.append(f"[{index}/{len(images)}] ok {relative} -> {request.scale}x ({summary.engine})")
 
         output_dir.mkdir(parents=True, exist_ok=True)
         report_path = output_dir / "_upscale_report.csv"
@@ -815,13 +843,13 @@ class LocalExecutor:
             report_path=report_path,
             rows=rows,
             stdout_lines=stdout_lines + [f"Report: {report_path}"],
-            backends_used=["internal-pillow"],
+            backends_used=[engine_label],
             models_used=[f"upscale:{request.mode}"],
         )
         if log_history:
             self._log_job(
                 job_type="upscale",
-                backend="internal-pillow",
+                backend=engine_label,
                 model=f"upscale:{request.mode}",
                 input_ref=str(input_dir),
                 output_ref=str(output_dir),
@@ -838,6 +866,8 @@ class LocalExecutor:
             raise ExecutionError("请填写主体商品说明。")
         if not request.background_prompt.strip():
             raise ExecutionError("请填写背景修改意愿。")
+        if request.background_style not in BACKGROUND_STYLE_PRESETS:
+            raise ExecutionError(f"未知背景风格预设：{request.background_style}")
 
         ai_settings = load_ai_settings()
         if not ai_settings.api_key.strip():
@@ -860,7 +890,7 @@ class LocalExecutor:
             generated_dir = temp_dir / "backgrounds"
             for index, input_path in enumerate(images, start=1):
                 relative = input_path.relative_to(input_dir)
-                output_path = output_dir / relative
+                output_path = build_output_path(input_path, input_dir, output_dir, request.preserve_structure)
                 if output_path.exists() and not request.overwrite:
                     rows.append(
                         {
@@ -901,22 +931,32 @@ class LocalExecutor:
 
                 with Image.open(input_path) as original_image:
                     size_label = choose_generation_size(*original_image.size)
-                prompt = build_background_prompt(request.subject_name, request.background_prompt)
-                generation = AIImageRunRequest(
-                    base_url=ai_settings.base_url,
-                    api_key=ai_settings.api_key,
-                    model=ai_settings.model,
-                    prompt=prompt,
-                    output_dir=str(generated_dir / relative.parent),
-                    image_count=1,
-                    size=size_label,
-                    quality="high",
-                    file_prefix=f"{relative.stem}_bg_",
-                    timeout_sec=ai_settings.timeout_sec,
+                prompt = build_background_prompt(
+                    request.subject_name,
+                    request.background_prompt,
+                    style=request.background_style,
                 )
-                try:
-                    generated_files, _logs = generate_images(generation)
-                except Exception as exc:
+                generated_files: list[str] = []
+                last_error = ""
+                for _attempt in range(max(1, request.retry_count) + 1):
+                    generation = AIImageRunRequest(
+                        base_url=ai_settings.base_url,
+                        api_key=ai_settings.api_key,
+                        model=ai_settings.model,
+                        prompt=prompt,
+                        output_dir=str(generated_dir / relative.parent),
+                        image_count=1,
+                        size=size_label,
+                        quality="high",
+                        file_prefix=f"{relative.stem}_bg_",
+                        timeout_sec=ai_settings.timeout_sec,
+                    )
+                    try:
+                        generated_files, _logs = generate_images(generation)
+                        break
+                    except Exception as exc:
+                        last_error = str(exc)
+                if not generated_files:
                     rows.append(
                         {
                             "input": str(input_path),
@@ -924,7 +964,7 @@ class LocalExecutor:
                             "model": ai_settings.model,
                             "backend": "openai-compatible",
                             "status": "fail",
-                            "reason": str(exc),
+                            "reason": last_error or "AI 背景生成失败",
                         }
                     )
                     stdout_lines.append(f"[{index}/{len(images)}] fail background {relative}")
@@ -938,7 +978,7 @@ class LocalExecutor:
                         "model": ai_settings.model,
                         "backend": f"{matt_backend}+openai-compatible",
                         "status": "ok",
-                        "reason": request.background_prompt.strip(),
+                        "reason": f"{request.background_style}: {request.background_prompt.strip()}",
                     }
                 )
                 stdout_lines.append(f"[{index}/{len(images)}] ok {relative} -> 背景已替换")

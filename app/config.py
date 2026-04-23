@@ -48,6 +48,8 @@ RUNTIME_ROOT = Path(
         _workspace_or_bundle(WORKSPACE_ROOT / "runtime" / "rembg", BUNDLE_ROOT / "runtime" / "rembg"),
     )
 )
+UPSCALE_RUNTIME_ROOT = Path(os.environ.get("UPSCALE_RUNTIME_DIR", WORKSPACE_ROOT / "runtime" / "upscale"))
+UPSCALE_BINARY = UPSCALE_RUNTIME_ROOT / "realesrgan-ncnn-vulkan.exe"
 MODELS_ROOT = Path(os.environ.get("REMBG_MODELS_ROOT", WORKSPACE_ROOT / "models" / ".u2net"))
 LEGACY_DATA_ROOT = WORKSPACE_ROOT / "data" / "background-desktop"
 DATA_ROOT = Path(os.environ.get("BACKGROUND_APP_DATA_DIR", WORKSPACE_ROOT / "data" / APP_SLUG))
