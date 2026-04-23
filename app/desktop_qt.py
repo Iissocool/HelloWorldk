@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import shlex
 import traceback
 from pathlib import Path
 from typing import Callable
@@ -43,6 +44,12 @@ from .command_bridge import execute_command
 from .config import APP_NAME, APP_TAGLINE, APP_VERSION, BACKGROUND_PNG, ICON_ICO
 from .executor import ExecutionError, LocalExecutor, ModelMissingError, RuntimeMissingError
 from .hardware import detect_hardware_profile
+from .hermes_adapter import (
+    launch_interactive_hermes_terminal,
+    run_container_shell_command,
+    run_docker_cli_command,
+    run_hermes_query,
+)
 from .history import HistoryStore
 from .models import (
     AIImageRunRequest,
@@ -585,14 +592,16 @@ class NeonPilotQtWindow(QMainWindow):
     def _build_agent_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        status_card = CardFrame("当前状态")
+        status_card = CardFrame("Agent 状态")
         form = QFormLayout()
         self.agent_docker = QLineEdit(); self.agent_docker.setReadOnly(True)
         self.agent_hermes = QLineEdit(); self.agent_hermes.setReadOnly(True)
         self.agent_chat = QLineEdit(); self.agent_chat.setReadOnly(True)
+        self.agent_interactive = QLineEdit(); self.agent_interactive.setReadOnly(True)
         form.addRow("Docker", self.agent_docker)
-        form.addRow("Hermes", self.agent_hermes)
+        form.addRow("Hermes Gateway", self.agent_hermes)
         form.addRow("对话能力", self.agent_chat)
+        form.addRow("交互式 CLI", self.agent_interactive)
         status_card.body().addLayout(form)
         self.agent_status_log = QPlainTextEdit(); self.agent_status_log.setReadOnly(True); self.agent_status_log.setMaximumHeight(140)
         status_card.body().addWidget(self.agent_status_log)
@@ -601,10 +610,22 @@ class NeonPilotQtWindow(QMainWindow):
             btn = QPushButton(text)
             btn.clicked.connect(lambda _=False, value=cmd: self._execute_agent_terminal_command(value))
             status_buttons.addWidget(btn)
+        native_btn = QPushButton("打开原生 Hermes")
+        native_btn.clicked.connect(self._open_native_hermes)
+        status_buttons.addWidget(native_btn)
         status_card.body().addLayout(status_buttons)
         layout.addWidget(status_card)
 
-        terminal_card = CardFrame("Hermes 终端")
+        terminal_card = CardFrame("Agent 调度终端")
+        self.agent_mode = QComboBox()
+        self.agent_mode.addItems(["workflow", "hermes", "docker", "container"])
+        self.agent_mode.currentTextChanged.connect(self._update_agent_mode_help)
+        terminal_card.body().addWidget(QLabel("终端模式"))
+        terminal_card.body().addWidget(self.agent_mode)
+        self.agent_help = QLabel("")
+        self.agent_help.setWordWrap(True)
+        self.agent_help.setObjectName("MutedLabel")
+        terminal_card.body().addWidget(self.agent_help)
         self.agent_terminal = QPlainTextEdit(); self.agent_terminal.setReadOnly(True)
         self.agent_terminal.setMinimumHeight(380)
         terminal_card.body().addWidget(self.agent_terminal)
@@ -621,6 +642,7 @@ class NeonPilotQtWindow(QMainWindow):
         terminal_buttons.addWidget(send_btn); terminal_buttons.addWidget(clear_btn)
         terminal_card.body().addLayout(terminal_buttons)
         layout.addWidget(terminal_card, 1)
+        self._update_agent_mode_help(self.agent_mode.currentText())
         return page
 
     def _build_history_page(self) -> QWidget:
@@ -696,6 +718,7 @@ class NeonPilotQtWindow(QMainWindow):
             self.agent_docker.setText("未知")
             self.agent_hermes.setText("未知")
             self.agent_chat.setText("不可用")
+            self.agent_interactive.setText("需原生终端")
             self.agent_status_log.setPlainText(str(payload))
             return
         docker_ok = payload.get("docker_daemon_running")
@@ -704,6 +727,7 @@ class NeonPilotQtWindow(QMainWindow):
         self.agent_docker.setText("已运行" if docker_ok else "未运行")
         self.agent_hermes.setText("已运行" if service_ok else "未运行")
         self.agent_chat.setText("可对话" if chat_ok else "需先配置 API")
+        self.agent_interactive.setText("使用原生终端" if service_ok else "服务未就绪")
         lines = [
             f"Docker daemon: {docker_ok}",
             f"Hermes service: {service_ok}",
@@ -711,8 +735,33 @@ class NeonPilotQtWindow(QMainWindow):
             f"Container: {payload.get('container_name', '')}",
             f"Data root: {payload.get('data_root', '')}",
             f"Version: {payload.get('version_text', '')}",
+            f"Hint: {payload.get('interactive_shell_hint', '')}",
         ]
         self.agent_status_log.setPlainText("\n".join(lines))
+
+    def _update_agent_mode_help(self, mode: str) -> None:
+        help_map = {
+            "workflow": "推荐给大多数用户。可直接运行 status、agent-ready、logs、workflow model show、workflow model set ...、workflow run ...，也可以直接输入聊天内容让 Hermes 回复。",
+            "hermes": "执行单次 Hermes CLI 命令，例如 hermes --help、hermes doctor。交互式命令如 hermes model / hermes --tui 需要原生终端。",
+            "docker": "执行宿主机 Docker 命令，例如 docker ps、docker images、docker logs neonpilot-hermes。",
+            "container": "执行容器内 shell 命令，例如 ls /opt/data、cat /opt/data/.env、hermes version。",
+        }
+        placeholder_map = {
+            "workflow": "例如: status  或  workflow model show  或  你好，帮我检查当前工作流状态",
+            "hermes": "例如: hermes doctor",
+            "docker": "例如: docker ps",
+            "container": "例如: ls /opt/data",
+        }
+        self.agent_help.setText(help_map.get(mode, ""))
+        self.agent_input.setPlaceholderText(placeholder_map.get(mode, "请输入命令"))
+
+    def _open_native_hermes(self) -> None:
+        ok, message = launch_interactive_hermes_terminal()
+        if ok:
+            self.agent_terminal.appendPlainText(f"[native]\\n{message}\\n")
+            self._set_ready("已打开原生 Hermes 终端")
+        else:
+            self._show_error(message)
 
     def _handle_execution_result(self, box: QPlainTextEdit, result) -> None:
         self._set_ready(result.summary or "执行完成")
@@ -809,6 +858,7 @@ class NeonPilotQtWindow(QMainWindow):
 
     def _dispatch_agent_command(self, text: str) -> dict:
         lowered = text.strip().lower()
+        mode = self.agent_mode.currentText()
         if lowered == "status":
             ok, payload = execute_command(["hermes-status"])
             return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2)}
@@ -821,12 +871,98 @@ class NeonPilotQtWindow(QMainWindow):
         if lowered == "logs":
             ok, payload = execute_command(["hermes-logs", "--tail", "120"])
             return {"ok": ok, "stdout": payload.get("stdout", ""), "stderr": payload.get("stderr", "")}
-        if lowered.startswith("hermes"):
-            ok, payload = execute_command(["hermes-exec", "--text", text])
+        if mode == "workflow":
+            return self._dispatch_workflow_command(text)
+        if mode == "hermes":
+            hermes_text = text if lowered.startswith("hermes") else f"hermes {text}"
+            ok, payload = execute_command(["hermes-exec", "--text", hermes_text])
             return {"ok": ok, "stdout": payload.get("stdout", ""), "stderr": payload.get("stderr", "")}
-        argv = text.split()
-        ok, payload = execute_command(argv)
-        return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2)}
+        if mode == "docker":
+            ok, stdout, stderr = run_docker_cli_command(text)
+            return {"ok": ok, "stdout": stdout, "stderr": stderr}
+        if mode == "container":
+            ok, stdout, stderr = run_container_shell_command(text)
+            return {"ok": ok, "stdout": stdout, "stderr": stderr}
+        return {"ok": False, "stdout": "", "stderr": "未知终端模式。"}
+
+    def _dispatch_workflow_command(self, text: str) -> dict:
+        stripped = text.strip()
+        lowered = stripped.lower()
+        if lowered in {"help", "workflow help"}:
+            return {
+                "ok": True,
+                "stdout": "\n".join(
+                    [
+                        "workflow commands:",
+                        "  status",
+                        "  agent-ready",
+                        "  logs",
+                        "  workflow model show",
+                        "  workflow model set --model <id> --provider <name> --base-url <url> --api-key <key>",
+                        "  workflow model test --model <id> --base-url <url> --api-key <key>",
+                        "  workflow run <bridge command>",
+                        "直接输入自然语言时，会转成 Hermes chat -q 查询。",
+                    ]
+                ),
+                "stderr": "",
+            }
+        if lowered in {"workflow model show", "model show"}:
+            ok, payload = execute_command(["hermes-config-show"])
+            return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2), "stderr": ""}
+        if lowered.startswith("workflow model set") or lowered.startswith("model set"):
+            argv = shlex.split(stripped)
+            if argv[0] == "workflow":
+                argv = argv[2:]
+            else:
+                argv = argv[1:]
+            mapping = {"--model": "", "--provider": "", "--base-url": "", "--api-key": ""}
+            key = None
+            for token in argv[1:]:
+                if token in mapping:
+                    key = token
+                    continue
+                if key:
+                    mapping[key] = token
+                    key = None
+            ok, payload = execute_command(
+                [
+                    "hermes-config-set",
+                    "--model",
+                    mapping["--model"],
+                    "--provider",
+                    mapping["--provider"],
+                    "--base-url",
+                    mapping["--base-url"],
+                    "--api-key",
+                    mapping["--api-key"],
+                ]
+            )
+            return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2), "stderr": ""}
+        if lowered.startswith("workflow model test") or lowered.startswith("model test"):
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": "workflow model test 下一步会并入统一测试。当前请先用 AI 生图页的“测试 API”，或在 workflow mode 下直接输入自然语言验证回复。",
+            }
+        if lowered.startswith("workflow run "):
+            bridge_command = stripped[len("workflow run ") :]
+            try:
+                ok, payload = execute_command(shlex.split(bridge_command))
+            except SystemExit as exc:
+                return {"ok": False, "stdout": "", "stderr": f"命令格式错误: {exc}"}
+            return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2), "stderr": ""}
+        try:
+            ok, stdout, stderr = run_hermes_query(
+                stripped,
+                session_name=self.agent_session.text().strip() or "neonpilot",
+            )
+            return {"ok": ok, "stdout": stdout, "stderr": stderr}
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": f"当前自然语言对话不可用：{exc}\n可先执行 workflow model show 检查模型和 API。",
+            }
 
     def _handle_agent_result(self, payload: dict) -> None:
         self._set_ready("Agent 已完成")

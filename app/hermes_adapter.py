@@ -73,9 +73,12 @@ class HermesEnvironmentStatus:
     service_running: bool = False
     hermes_available: bool = False
     hermes_version: str = ""
+    version_text: str = ""
     container_name: str = DOCKER_CONTAINER
     image_name: str = DOCKER_IMAGE
     data_root: str = ""
+    inference_ready: bool = False
+    interactive_shell_hint: str = ""
     summary: str = ""
     notes: list[str] = field(default_factory=list)
 
@@ -236,6 +239,14 @@ def test_openai_compatible_provider(model: str, api_key: str, base_url: str, tim
     return True, body
 
 
+def _inference_ready() -> bool:
+    model_settings = load_hermes_model_settings()
+    provider_settings = load_hermes_provider_settings(model_settings.provider, model_settings.base_url)
+    if provider_settings.api_key.strip():
+        return True
+    return False
+
+
 def _load_session_map() -> dict[str, str]:
     path = hermes_session_map_path()
     if not path.exists():
@@ -357,15 +368,15 @@ def detect_interactive_command(command: str) -> str | None:
     head = tokens[0].lower()
     second = tokens[1].lower() if len(tokens) > 1 else ""
     if head == "model":
-        return "hermes model 是交互式命令。请使用程序里的“模型设置”区域。"
+        return "hermes model 是交互式终端命令。嵌入面板不支持 TTY，请使用“打开原生 Hermes 终端”，或改用 workflow model set / workflow model show。"
     if head in {"chat", "setup", "dashboard"}:
-        return f"hermes {head} 需要交互终端，当前命令框不支持。"
+        return f"hermes {head} 需要交互终端，嵌入面板不支持 TTY。请使用“打开原生 Hermes 终端”。"
     if head == "config" and second == "edit":
-        return "hermes config edit 会打开交互编辑器，当前命令框不支持。"
+        return "hermes config edit 会打开交互编辑器，嵌入面板不支持 TTY。请使用“打开原生 Hermes 终端”。"
     if head == "auth" and second in {"add", "login"}:
         return f"hermes auth {second} 需要交互流程，当前命令框不支持。"
     if head in {"login", "logout"}:
-        return f"hermes {head} 需要交互流程，当前命令框不支持。"
+        return f"hermes {head} 需要交互流程，嵌入面板不支持 TTY。请使用“打开原生 Hermes 终端”。"
     return None
 
 
@@ -499,6 +510,8 @@ def inspect_hermes_environment() -> HermesEnvironmentStatus:
         docker_desktop_path=str(desktop) if desktop else "",
         data_root=str(hermes_data_root()),
     )
+    status.inference_ready = _inference_ready()
+    status.interactive_shell_hint = "Hermes 官方推荐交互式 CLI/TUI 在真实终端中运行。"
 
     try:
         status.docker_daemon_running = docker_daemon_ready()
@@ -530,12 +543,14 @@ def inspect_hermes_environment() -> HermesEnvironmentStatus:
                 text = line.strip()
                 if text.startswith("Hermes Agent "):
                     status.hermes_version = text
+                    status.version_text = text
                     break
 
     if running:
         status.summary = "Docker Hermes 服务正在运行。"
         status.notes = [
             "可以直接在下方运行 Hermes 命令。",
+            "交互式 model/setup/TUI 请走真实终端。",
             f"数据目录：{status.data_root}",
             f"容器名：{DOCKER_CONTAINER}",
         ]
@@ -651,6 +666,56 @@ def run_hermes_command(command: str, *, ensure_image: bool = True) -> tuple[bool
         timeout_sec=600,
     )
     return completed.returncode == 0, completed.stdout, completed.stderr
+
+
+def run_docker_cli_command(command: str, *, timeout_sec: int = 600) -> tuple[bool, str, str]:
+    ready, message = start_docker_desktop()
+    if not ready:
+        raise RuntimeError(message)
+    tokens = shlex.split(command)
+    if tokens and tokens[0].lower() == "docker":
+        tokens = tokens[1:]
+    if not tokens:
+        raise RuntimeError("请输入 docker 命令，例如 docker ps 或 ps。")
+    completed = _run_docker(*tokens, timeout_sec=timeout_sec)
+    return completed.returncode == 0, completed.stdout, completed.stderr
+
+
+def run_container_shell_command(command: str, *, timeout_sec: int = 600) -> tuple[bool, str, str]:
+    ready, message = start_docker_desktop()
+    if not ready:
+        raise RuntimeError(message)
+    ok, stdout, stderr = start_hermes_service()
+    if not ok:
+        raise RuntimeError((stdout + "\n" + stderr).strip())
+    completed = _run_docker(
+        "exec",
+        DOCKER_CONTAINER,
+        "sh",
+        "-lc",
+        command,
+        timeout_sec=timeout_sec,
+    )
+    return completed.returncode == 0, completed.stdout, completed.stderr
+
+
+def launch_interactive_hermes_terminal(*, command: str = "hermes") -> tuple[bool, str]:
+    ready, message = start_docker_desktop()
+    if not ready:
+        return False, message
+    data_root = hermes_data_root()
+    terminal_command = (
+        f'docker run -it --rm -v "{docker_volume_path(data_root)}:/opt/data" {DOCKER_IMAGE} {command}'
+    )
+    try:
+        subprocess.Popen(
+            ["cmd.exe", "/k", terminal_command],
+            creationflags=DETACHED_PROCESS,
+            close_fds=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+    return True, "已打开原生终端。这个窗口支持 hermes model、hermes --tui 等交互式命令。"
 
 
 def export_hermes_skill(project_root: Path, runner_script: Path, *, export_root: Path | None = None) -> Path:
