@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -132,6 +133,21 @@ def _jsx_safe_path(path: Path) -> str:
     return path.as_posix().replace("'", "\\'")
 
 
+def prepare_batch_source_directory(input_dir: Path, output_dir: Path) -> tuple[Path, int]:
+    if input_dir.resolve() == output_dir.resolve():
+        output_dir.mkdir(parents=True, exist_ok=True)
+        existing = image_count_in_directory(output_dir)
+        return output_dir, existing
+    output_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for path in sorted(input_dir.iterdir()):
+        if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        shutil.copy2(path, output_dir / path.name)
+        copied += 1
+    return output_dir, copied
+
+
 def run_photoshop_action_batch(
     input_dir: Path,
     output_dir: Path,
@@ -145,22 +161,17 @@ def run_photoshop_action_batch(
     if not photoshop_path or not photoshop_path.exists():
         raise FileNotFoundError("未找到 Photoshop 可执行文件。")
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    working_dir, copied = prepare_batch_source_directory(input_dir, output_dir)
     jsx_content = f"""
-var inputFolder = new Folder('{_jsx_safe_path(input_dir)}');
-var outputFolder = new Folder('{_jsx_safe_path(output_dir)}');
+var inputFolder = new Folder('{_jsx_safe_path(working_dir)}');
 if (!inputFolder.exists) {{
     throw new Error('Input folder missing: ' + inputFolder.fsName);
 }}
-if (!outputFolder.exists) {{
-    outputFolder.create();
-}}
 app.displayDialogs = DialogModes.NO;
 var opts = new BatchOptions();
-opts.destination = BatchDestinationType.FOLDER;
-opts.destinationFolder = outputFolder;
+opts.destination = BatchDestinationType.SAVEANDCLOSE;
 opts.overrideOpen = true;
-opts.overrideSave = true;
+opts.overrideSave = false;
 app.batch(inputFolder, '{action_name}', '{action_set}', opts);
 app.quit();
 """
@@ -183,4 +194,4 @@ app.quit();
             jsx_path.unlink(missing_ok=True)
         except OSError:
             pass
-    return completed, command
+    return completed, command + [f"--prepared={copied}", f"--working-dir={working_dir}"]
