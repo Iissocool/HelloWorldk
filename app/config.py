@@ -8,7 +8,7 @@ from pathlib import Path
 
 APP_NAME = "NeonPilot"
 APP_SLUG = "neonpilot"
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.9.0"
 APP_TAGLINE = "Cyberpunk AI imaging cockpit"
 
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -75,6 +75,7 @@ ASSETS_ROOT = Path(
     )
 )
 BRANDING_ROOT = ASSETS_ROOT / "branding"
+FONTS_ROOT = ASSETS_ROOT / "fonts"
 ICON_PNG = BRANDING_ROOT / "neonpilot-icon.png"
 ICON_ICO = BRANDING_ROOT / "neonpilot.ico"
 LOGO_PNG = BRANDING_ROOT / "neonpilot-logo.png"
@@ -82,6 +83,8 @@ SPLASH_PNG = BRANDING_ROOT / "neonpilot-splash.png"
 SPLASH_GIF = BRANDING_ROOT / "neonpilot-splash.gif"
 BACKGROUND_PNG = BRANDING_ROOT / "neonpilot-bg.png"
 BACKGROUND_GIF = BRANDING_ROOT / "neonpilot-bg.gif"
+UI_FONT_TTF = FONTS_ROOT / "NotoSansSCVariable.ttf"
+DISPLAY_FONT_TTF = FONTS_ROOT / "OrbitronVariable.ttf"
 VENV_ROOT = WORKSPACE_ROOT / "venvs"
 
 

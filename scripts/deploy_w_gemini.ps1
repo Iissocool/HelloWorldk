@@ -34,9 +34,14 @@ foreach ($legacyTarget in $legacyTargets) {
 }
 
 if (Test-Path $appRoot) {
-  cmd /c rmdir /s /q "$appRoot" | Out-Null
-  if (Test-Path $appRoot) {
-    Remove-Item -Recurse -Force $appRoot
+  $backupRoot = Join-Path $workspaceRoot ("apps\\NeonPilot_backup_" + (Get-Date -Format "yyyyMMdd_HHmmss"))
+  try {
+    Rename-Item -Path $appRoot -NewName (Split-Path $backupRoot -Leaf)
+  } catch {
+    cmd /c rmdir /s /q "$appRoot" | Out-Null
+    if (Test-Path $appRoot) {
+      Remove-Item -Recurse -Force $appRoot
+    }
   }
 }
 New-Item -ItemType Directory -Force -Path $appRoot | Out-Null
@@ -51,6 +56,8 @@ if (Test-Path $installerSource) {
   Copy-Item -Path $installerSource -Destination (Join-Path $installerRoot "NeonPilot-Setup.exe") -Force
 }
 Copy-Item -Path (Join-Path $repoRoot "docs\*") -Destination $docsRoot -Recurse -Force
+Copy-Item -Path (Join-Path $repoRoot "scripts\run_resize_batch.ps1") -Destination (Join-Path $appRoot "scripts\run_resize_batch.ps1") -Force
+Copy-Item -Path (Join-Path $repoRoot "scripts\run_ps_resize_batch.ps1") -Destination (Join-Path $appRoot "scripts\run_ps_resize_batch.ps1") -Force
 
 $psLauncher = @(
   '$ErrorActionPreference = "Stop"',

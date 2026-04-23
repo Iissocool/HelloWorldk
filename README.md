@@ -1,22 +1,27 @@
-﻿# NeonPilot
+# NeonPilot
 
-> 个人使用的 AI 图片工作台，主要使用 GPT-5.4 协助开发，项目仍在持续更新中。
+个人使用的 AI 图片工作台，主要使用 GPT-5.4 协助开发，项目仍在持续更新中。
 
-NeonPilot 把抠图、批处理、批量命名、AI 生图、资源管理和 Docker Hermes Agent 对话整合进同一个 Windows 桌面程序。
+NeonPilot 把抠图、批量命名、AI 生图、高清增强、原生批量调尺寸、Photoshop 套图、资源管理和 Hermes Agent 工作流终端整合在同一个 Windows 桌面程序里。
 
-## 当前功能
+## 当前主线能力
 - 单图抠图
 - 固定模型批处理
 - 智能批处理
 - 批量命名
 - OpenAI 兼容 AI 生图
+- Real-ESRGAN ncnn Vulkan 高清增强
+- 程序内原生批量调尺寸
+  - 批量改宽度
+  - 批量改高度
+  - 批量写入 DPI
+  - 模式：留比例补边 / 留比例裁切 / 强制拉伸 / 仅留比例缩放
 - Photoshop 自动套图桥接
 - 资源中心
   - 自动补齐最小运行依赖
   - 运行时按需安装 / 卸载
   - 模型按需安装 / 卸载
-- Docker Hermes 聊天终端
-- 程序 CLI 命令桥
+- Hermes Agent 工作流终端
 
 ## 启动方式
 
@@ -38,10 +43,63 @@ powershell -ExecutionPolicy Bypass -File .\run_desktop_app.ps1
 powershell -ExecutionPolicy Bypass -File .\run_self_test.ps1
 ```
 
-### 4. 可选 Web 控制台
-```powershell
-powershell -ExecutionPolicy Bypass -File .\run_app.ps1
+## 推荐工作流
+
+### 工作流 1：转高清 -> 调尺寸 -> PS 套图
+适合重复处理同一类商品图。
+
+```text
+workflow run upscale-ps --input-dir "W:\images\in" --upscale-dir "W:\images\upscaled" --resize-dir "W:\images\resized" --resize-width 1800 --resize-height 1800 --resize-dpi 300 --ps-output-dir "W:\images\final" --template "C:\Users\F1736\Desktop\模板\昔音浴帘.psd" --droplet "C:\Users\F1736\Desktop\自动套图 图标.exe" --close-photoshop
 ```
+
+### 工作流 2：保主体批量换背景
+适合按主体商品和背景意愿批量改图。
+
+```text
+workflow run background-refresh --input-dir "W:\images\source" --output-dir "W:\images\out" --subject "浴帘" --background "北欧奶油风浴室电商场景，柔和自然光，干净高级" --style clean-ecommerce
+```
+
+## 原生批量调尺寸 CLI
+现在调尺寸不再依赖 Photoshop，可以直接走程序内引擎。
+
+### PowerShell 脚本
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_resize_batch.ps1 -InputDir "W:\images\in" -OutputDir "W:\images\resized" -Width 1800 -Height 1800 -Dpi 300 -Mode contain-pad
+```
+
+### 命令桥
+```powershell
+.\.venv\Scripts\python.exe -m app.command_bridge resize-batch --input-dir "W:\images\in" --output-dir "W:\images\resized" --width 1800 --height 1800 --dpi 300 --mode contain-pad
+```
+
+## Photoshop 自动套图桥接
+适合你现在这条现成流程：
+
+1. 打开 Photoshop
+2. 加载模板 PSD
+3. 把整个素材文件夹交给 Adobe Photoshop Droplet
+4. 由 Droplet 绑定的 Photoshop 动作自动完成套图和保存
+
+程序里的 `PS 套图` 页会填写：
+- 模板 PSD
+- Droplet 程序
+- 素材目录
+- Photoshop 程序
+- 结果收集目录
+- 执行完成后自动关闭 Photoshop
+
+## Agent
+Agent 页现在只保留三件事：
+- 看简洁状态
+- 改模型与 API 配置
+- 直接执行工作流命令
+
+常用命令：
+- `workflow help`
+- `workflow model show`
+- `workflow model set --model <模型> --provider <提供方> --base-url <地址> --api-key <密钥>`
+- `workflow run upscale-ps ...`
+- `workflow run background-refresh ...`
 
 ## 资源中心
 桌面程序里的“资源中心”负责两类可选资源。
@@ -57,75 +115,6 @@ powershell -ExecutionPolicy Bypass -File .\run_app.ps1
 - 默认不会一次性下载全部模型
 - 用到哪个模型，再安装哪个模型
 - 支持一键卸载，方便清理磁盘
-
-## Agent
-Agent 页现在只保留三件事：
-- 看状态
-- 改模型与 API 配置
-- 直接和 Hermes 对话
-
-常用按钮：
-- `刷新状态`
-- `一键准备 Agent`
-- `查看日志`
-- `测试 API`
-- `测试聊天`
-- `压缩配置`
-
-Hermes 数据目录固定在：
-
-```text
-W:\gemini\data\neonpilot\hermes
-```
-
-## Photoshop 自动套图桥接
-适合你现在这条现成流程：
-
-1. 打开 Photoshop
-2. 加载模板 PSD
-3. 把整个素材文件夹交给 Adobe Photoshop Droplet
-4. 由 Droplet 绑定的 Photoshop 动作自动完成套图和保存
-
-在程序里的 `PS 套图` 页填写：
-- `模板 PSD`
-- `Droplet 程序`
-- `素材目录`
-- `Photoshop 程序`
-- `执行完成后自动关闭 Photoshop`
-
-说明：
-- 程序会先打开模板，再把整个文件夹发送给 Droplet
-- 当前最终输出目录仍由这个 Droplet 对应的 Photoshop 动作决定
-- 如果 Droplet 在设定等待时间内结束，程序会自动关闭 Photoshop
-- 如果 Droplet 还在持续运行，程序会先跳过自动关闭，避免中断当前套图
-- 如果后续要让 NeonPilot 直接控制导出目录，下一步应改成 Photoshop JSX / Action 桥接
-
-## Agent 终端
-Agent 页现在改成了终端优先。
-
-常用命令：
-- `help`
-- `status`
-- `agent-ready`
-- `logs`
-- `hermes-config-show`
-- `hermes-config-set --model deepseek-reasoner --provider auto --base-url https://api.deepseek.com/v1 --api-key <KEY>`
-- `ps-batch --template "..." --droplet "..." --input-dir "..." --close-photoshop`
-
-说明：
-- Docker / Hermes 状态仍然保留在终端上方
-- 模型、API、工作流通过命令直接执行
-- 不再依赖右侧一堆单独的配置按钮
-
-## CLI 命令桥
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\run_neonpilot_cli.ps1 health
-powershell -ExecutionPolicy Bypass -File .\scripts\run_neonpilot_cli.ps1 hardware
-powershell -ExecutionPolicy Bypass -File .\scripts\run_neonpilot_cli.ps1 plan
-powershell -ExecutionPolicy Bypass -File .\scripts\run_neonpilot_cli.ps1 runtime-status
-powershell -ExecutionPolicy Bypass -File .\scripts\run_neonpilot_cli.ps1 model-status
-powershell -ExecutionPolicy Bypass -File .\scripts\run_neonpilot_cli.ps1 hermes-status
-```
 
 ## 打包
 ```powershell

@@ -29,6 +29,7 @@ JobType = Literal[
     "image",
     "ai_test",
     "ps_batch",
+    "resize",
     "upscale",
     "background_replace",
     "agent",
@@ -165,6 +166,17 @@ class UpscaleRunRequest(BaseModel):
     overwrite: bool = False
 
 
+class ResizeRunRequest(BaseModel):
+    input_dir: str
+    output_dir: str
+    width: int = 1800
+    height: int = 1800
+    dpi: int = 300
+    mode: Literal["contain-pad", "cover-crop", "stretch", "keep-ratio"] = "contain-pad"
+    recurse: bool = False
+    overwrite: bool = False
+
+
 class BackgroundReplaceRunRequest(BaseModel):
     input_dir: str
     output_dir: str
@@ -189,15 +201,6 @@ class PhotoshopBatchRequest(BaseModel):
     timeout_sec: int = 1800
     collect_wait_sec: int = 15
     close_photoshop_when_done: bool = False
-
-
-class PhotoshopResizeBatchRequest(BaseModel):
-    input_dir: str
-    output_dir: str
-    photoshop_path: str = ""
-    action_set: str = "默认动作"
-    action_name: str = "高透三折叠套图-透明图"
-    timeout_sec: int = 3600
 
 
 class AppSettings(BaseModel):

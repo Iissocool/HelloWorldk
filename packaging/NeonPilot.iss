@@ -1,5 +1,5 @@
 #define MyAppName "NeonPilot"
-#define MyAppVersion "0.8.0"
+#define MyAppVersion "0.9.0"
 #define MyAppPublisher "NeonPilot Project"
 #define MyAppExeName "NeonPilot.exe"
 #define MyBuildDir "..\dist\NeonPilot"
@@ -34,6 +34,8 @@ Source: "..\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubd
 Source: "..\docs\*"; DestDir: "{app}\docs"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\scripts\setup_windows_runtime.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\scripts\run_neonpilot_cli.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\run_resize_batch.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "..\scripts\run_ps_resize_batch.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "..\requirements-app.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 

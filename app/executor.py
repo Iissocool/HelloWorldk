@@ -28,7 +28,7 @@ from .models import (
     BackgroundReplaceRunRequest,
     BatchRunRequest,
     ExecutionResult,
-    PhotoshopResizeBatchRequest,
+    ResizeRunRequest,
     PhotoshopBatchRequest,
     RenameRunRequest,
     SingleRunRequest,
@@ -41,11 +41,11 @@ from .photoshop_bridge import (
     image_count_in_directory,
     open_template_in_photoshop,
     resolve_photoshop_executable,
-    run_photoshop_action_batch,
     run_droplet_on_folder,
     wait_for_template_ready,
 )
 from .planner import build_runtime_plan
+from .resizer import image_paths_from_dir as resize_image_paths_from_dir, resize_image
 from .renamer import build_rename_plan, execute_rename_plan
 from .runtime_manager import (
     model_installed,
@@ -669,80 +669,92 @@ class LocalExecutor:
             )
         return result
 
-    def run_photoshop_resize_batch(self, request: PhotoshopResizeBatchRequest, *, log_history: bool = True) -> ExecutionResult:
+    def run_resize_batch(self, request: ResizeRunRequest, *, log_history: bool = True) -> ExecutionResult:
         input_dir = Path(request.input_dir)
         output_dir = Path(request.output_dir)
-        if not input_dir.exists() or not input_dir.is_dir():
-            raise ExecutionError(f"批处理输入目录不存在：{input_dir}")
-        images = self._collect_image_outputs(input_dir)
-        if not images:
-            raise ExecutionError("当前批处理输入目录里没有可处理的图片。")
+        if not input_dir.is_dir():
+            raise ExecutionError(f"输入目录不存在：{input_dir}")
+        if request.width <= 0 and request.height <= 0:
+            raise ExecutionError("宽度和高度不能同时为空。")
+        if request.dpi <= 0:
+            raise ExecutionError("DPI 必须大于 0。")
 
-        photoshop_path = resolve_photoshop_executable(request.photoshop_path) if request.photoshop_path.strip() else detect_photoshop_executable()
-        try:
-            completed, command = run_photoshop_action_batch(
-                input_dir,
-                output_dir,
-                action_set=request.action_set,
-                action_name=request.action_name,
-                photoshop_executable=photoshop_path,
-                timeout_sec=request.timeout_sec,
+        images = resize_image_paths_from_dir(input_dir, request.recurse)
+        if not images:
+            raise ExecutionError(f"当前目录里没有可处理图片：{input_dir}")
+
+        rows: list[dict[str, str]] = []
+        stdout_lines: list[str] = []
+        for index, input_path in enumerate(images, start=1):
+            relative = input_path.relative_to(input_dir)
+            output_path = output_dir / relative
+            if output_path.exists() and not request.overwrite:
+                rows.append(
+                    {
+                        "input": str(input_path),
+                        "output": str(output_path),
+                        "model": f"resize:{request.mode}",
+                        "backend": "pillow-native",
+                        "status": "skipped",
+                        "reason": "existing output",
+                    }
+                )
+                stdout_lines.append(f"[{index}/{len(images)}] skip {relative}")
+                continue
+
+            summary = resize_image(
+                input_path,
+                output_path,
+                width=request.width,
+                height=request.height,
+                dpi=request.dpi,
+                mode=request.mode,
             )
-        except subprocess.TimeoutExpired as exc:
-            artifacts = self._collect_image_outputs(output_dir)
-            result = ExecutionResult(
-                ok=True,
-                command=["internal:ps-resize"],
-                stdout="\n".join(
-                    [
-                        f"已启动 Photoshop 批处理动作：{request.action_set} / {request.action_name}",
-                        f"输入目录：{input_dir}",
-                        f"输出目录：{output_dir}",
-                        f"当前已收集结果数：{len(artifacts)}",
-                        "Photoshop 仍在继续执行批处理。",
-                        exc.stdout or "",
-                    ]
-                ).strip(),
-                stderr=exc.stderr or "",
-                return_code=0,
-                output_path=str(output_dir),
-                backend_used="photoshop-batch",
-                model_used=f"{request.action_set}/{request.action_name}",
-                summary=f"Photoshop 批处理调尺寸已启动，当前目录 {len(images)} 张图片正在处理。",
-                artifacts=artifacts,
+            rows.append(
+                {
+                    "input": summary.input_path,
+                    "output": summary.output_path,
+                    "model": f"resize:{request.mode}",
+                    "backend": summary.engine,
+                    "status": "ok",
+                    "reason": f"{summary.width}x{summary.height} @ {summary.dpi_x or request.dpi}dpi",
+                }
             )
-        else:
-            artifacts = self._collect_image_outputs(output_dir)
-            success = completed.returncode == 0 or len(artifacts) > 0
-            result = ExecutionResult(
-                ok=success,
-                command=command,
-                stdout="\n".join(
-                    [
-                        f"已执行 Photoshop 批处理动作：{request.action_set} / {request.action_name}",
-                        f"输入目录：{input_dir}",
-                        f"输出目录：{output_dir}",
-                        f"输出结果数：{len(artifacts)}",
-                        completed.stdout or "",
-                    ]
-                ).strip(),
-                stderr=completed.stderr or "",
-                return_code=completed.returncode,
-                output_path=str(output_dir),
-                backend_used="photoshop-batch",
-                model_used=f"{request.action_set}/{request.action_name}",
-                summary=(
-                    f"Photoshop 批处理调尺寸完成，已输出 {len(artifacts)} 张图片。"
-                    if success
-                    else "Photoshop 批处理调尺寸执行失败。"
-                ),
-                artifacts=artifacts,
+            stdout_lines.append(
+                f"[{index}/{len(images)}] ok {relative} -> {summary.width}x{summary.height} @ {summary.dpi_x or request.dpi}dpi ({summary.mode})"
             )
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report_path = output_dir / "_resize_report.csv"
+        with report_path.open("w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["input", "output", "model", "backend", "status", "reason"],
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+
+        result = self._aggregate_result(
+            job_type="resize",
+            report_path=report_path,
+            rows=rows,
+            stdout_lines=stdout_lines + [f"Report: {report_path}"],
+            backends_used=["pillow-native"],
+            models_used=[f"resize:{request.mode}"],
+        )
+        result.output_path = str(output_dir)
+        result.artifacts = self._collect_image_outputs(output_dir)
+        result.summary = (
+            f"批量调尺寸完成，已输出 {sum(1 for row in rows if row['status'] == 'ok')} 张图片，"
+            f"目标 {request.width}x{request.height} @ {request.dpi} DPI。"
+            if result.ok
+            else "批量调尺寸执行失败。"
+        )
         if log_history:
             self._log_job(
-                job_type="ps_batch",
-                backend="photoshop-batch",
-                model=f"{request.action_set}/{request.action_name}",
+                job_type="resize",
+                backend="pillow-native",
+                model=f"resize:{request.mode}",
                 input_ref=str(input_dir),
                 output_ref=str(output_dir),
                 result=result,

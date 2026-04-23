@@ -1,13 +1,14 @@
 ﻿from __future__ import annotations
 
 import json
+import os
 import shlex
 import traceback
 from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -41,7 +42,16 @@ from .ai_image import load_ai_settings, save_ai_settings
 from .app_settings import load_app_settings, save_app_settings
 from .catalog import MODEL_CATALOG
 from .command_bridge import execute_command
-from .config import APP_NAME, APP_TAGLINE, APP_VERSION, BACKGROUND_PNG, DOCS_ROOT, ICON_ICO
+from .config import (
+    APP_NAME,
+    APP_TAGLINE,
+    APP_VERSION,
+    BACKGROUND_PNG,
+    DISPLAY_FONT_TTF,
+    DOCS_ROOT,
+    ICON_ICO,
+    UI_FONT_TTF,
+)
 from .executor import ExecutionError, LocalExecutor, ModelMissingError, RuntimeMissingError
 from .hardware import detect_hardware_profile
 from .hermes_adapter import (
@@ -53,9 +63,9 @@ from .models import (
     AIImageRunRequest,
     AIImageTestRequest,
     BatchRunRequest,
-    PhotoshopResizeBatchRequest,
     PhotoshopBatchRequest,
     RenameRunRequest,
+    ResizeRunRequest,
     SingleRunRequest,
     SmartRunRequest,
     UpscaleRunRequest,
@@ -125,9 +135,27 @@ class CardFrame(QFrame):
         return self.layout_
 
 
+def _register_font(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    font_id = QFontDatabase.addApplicationFont(str(path))
+    if font_id < 0:
+        return None
+    families = QFontDatabase.applicationFontFamilies(font_id)
+    return families[0] if families else None
+
+
+def load_app_fonts() -> tuple[str, str]:
+    ui_family = _register_font(UI_FONT_TTF) or "Segoe UI"
+    display_family = _register_font(DISPLAY_FONT_TTF) or ui_family
+    return ui_family, display_family
+
+
 class NeonPilotQtWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, *, ui_font_family: str = "Segoe UI", display_font_family: str = "Segoe UI") -> None:
         super().__init__()
+        self.ui_font_family = ui_font_family
+        self.display_font_family = display_font_family
         self.executor = LocalExecutor()
         self.history_store = HistoryStore()
         self.thread_pool = QThreadPool.globalInstance()
@@ -211,7 +239,7 @@ class NeonPilotQtWindow(QMainWindow):
         self._add_page("批量命名", self._build_rename_page())
         self._add_page("AI 生图", self._build_ai_page())
         self._add_page("高清增强", self._build_upscale_page())
-        self._add_page("PS 调尺寸", self._build_ps_resize_page())
+        self._add_page("图片调尺寸", self._build_resize_page())
         self._add_page("PS 套图", self._build_ps_page())
         self._add_page("资源中心", self._build_resources_page())
         self._add_page("Agent 终端", self._build_agent_page())
@@ -219,23 +247,27 @@ class NeonPilotQtWindow(QMainWindow):
         self.nav.setCurrentRow(0)
 
     def _apply_style(self) -> None:
+        ui_family = self.ui_font_family.replace("'", "\\'")
+        display_family = self.display_font_family.replace("'", "\\'")
         self.setStyleSheet(
             """
-            QMainWindow, QWidget { background: transparent; color: #eaf4ff; font-family: 'Segoe UI'; font-size: 14px; }
+            QMainWindow, QWidget { background: transparent; color: #eaf4ff; font-family: '%s'; font-size: 12px; }
             QFrame#CardFrame { background: rgba(10, 22, 40, 0.78); border: 1px solid rgba(120, 190, 255, 0.28); border-radius: 20px; }
-            QLabel#BrandTitle { font-size: 34px; font-weight: 700; color: #f5fbff; }
-            QLabel#PageTitle { font-size: 26px; font-weight: 700; color: #f7fbff; }
-            QLabel#CardTitle { font-size: 20px; font-weight: 600; color: #a9e3ff; }
-            QLabel#MutedLabel { color: rgba(230, 242, 255, 0.72); font-size: 13px; }
+            QLabel#BrandTitle { font-family: '%s'; font-size: 30px; font-weight: 650; letter-spacing: 1px; color: #f7fbff; }
+            QLabel#PageTitle { font-size: 23px; font-weight: 700; color: #f7fbff; }
+            QLabel#CardTitle { font-size: 18px; font-weight: 600; color: #a9e3ff; }
+            QLabel#MutedLabel { color: rgba(230, 242, 255, 0.72); font-size: 11px; }
             QLabel#StatusPill { background: rgba(88, 170, 255, 0.18); border: 1px solid rgba(130, 206, 255, 0.44); border-radius: 18px; padding: 6px 14px; color: #dff7ff; font-weight: 600; }
+            QLabel#StatusChip { background: rgba(16, 40, 70, 0.85); border: 1px solid rgba(126, 203, 255, 0.36); border-radius: 12px; padding: 5px 10px; color: #eaf5ff; font-size: 11px; font-weight: 600; }
             QListWidget#NavList { background: transparent; border: none; outline: none; }
             QListWidget#NavList::item { background: rgba(255,255,255,0.02); border: 1px solid rgba(120,190,255,0.18); border-radius: 14px; padding: 14px 16px; margin: 3px 0; }
             QListWidget#NavList::item:selected { background: rgba(100, 196, 255, 0.22); border: 1px solid rgba(130, 220, 255, 0.60); }
-            QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(115,208,255,0.95), stop:1 rgba(86,136,255,0.95)); border: none; border-radius: 14px; color: #02111f; padding: 12px 18px; font-weight: 700; }
+            QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(115,208,255,0.95), stop:1 rgba(86,136,255,0.95)); border: none; border-radius: 14px; color: #02111f; padding: 10px 16px; font-size: 12px; font-weight: 700; }
             QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(145,222,255,1), stop:1 rgba(116,164,255,1)); }
             QPushButton:pressed { background: rgba(110, 180, 255, 0.75); }
-            QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QTableWidget { background: rgba(3, 13, 28, 0.88); border: 1px solid rgba(105, 190, 255, 0.36); border-radius: 12px; padding: 8px 10px; selection-background-color: rgba(108, 201, 255, 0.40); }
-            QTextEdit, QPlainTextEdit { padding: 10px 12px; }
+            QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QTableWidget { background: rgba(3, 13, 28, 0.88); border: 1px solid rgba(105, 190, 255, 0.36); border-radius: 12px; padding: 7px 10px; selection-background-color: rgba(108, 201, 255, 0.40); }
+            QTextEdit, QPlainTextEdit { padding: 10px 12px; font-size: 12px; }
+            QLineEdit, QComboBox, QSpinBox { min-height: 20px; }
             QComboBox::drop-down { border: none; width: 28px; }
             QScrollArea { border: none; background: transparent; }
             QHeaderView::section { background: rgba(12, 28, 48, 0.92); color: #bde8ff; padding: 8px; border: none; border-bottom: 1px solid rgba(110, 200, 255, 0.28); }
@@ -248,6 +280,7 @@ class NeonPilotQtWindow(QMainWindow):
             QScrollBar:horizontal { background: rgba(8, 18, 30, 0.7); height: 14px; margin: 4px; border-radius: 7px; }
             QScrollBar::handle:horizontal { background: rgba(120, 194, 255, 0.55); min-width: 30px; border-radius: 7px; }
             """
+            % (ui_family, display_family)
         )
 
     def _add_page(self, title: str, widget: QWidget) -> None:
@@ -552,30 +585,49 @@ class NeonPilotQtWindow(QMainWindow):
         layout.addRow(self.upscale_log)
         return self._wrap_scroll(page)
 
-    def _build_ps_resize_page(self) -> QWidget:
-        page = QWidget(); layout = QFormLayout(page)
-        detected_ps = detect_photoshop_executable()
-        self.ps_resize_exe, row = self._path_row(
-            "选择 Photoshop 程序或目录",
-            default=str(detected_ps.parent if detected_ps else Path(r"C:\Program Files\Adobe\Adobe Photoshop (Beta)")),
-            filter_text="Executable (*.exe);;All Files (*)",
-        )
-        layout.addRow("Photoshop", row)
-        self.ps_resize_input, row = self._path_row("选择需要调尺寸的目录", folder=True)
+    def _build_resize_page(self) -> QWidget:
+        page = QWidget()
+        layout = QFormLayout(page)
+        tip = QLabel("直接在程序内批量修改宽度、高度和 DPI，不再依赖 Photoshop。推荐模式：留比例补边。")
+        tip.setObjectName("MutedLabel")
+        tip.setWordWrap(True)
+        layout.addRow(tip)
+        self.resize_input, row = self._path_row("选择需要调尺寸的目录", folder=True)
         layout.addRow("输入目录", row)
-        self.ps_resize_output, row = self._path_row("选择调尺寸输出目录", folder=True)
+        self.resize_output, row = self._path_row("选择调尺寸输出目录", folder=True)
         layout.addRow("输出目录", row)
-        self.ps_resize_action_set = QLineEdit("默认动作")
-        self.ps_resize_action_name = QLineEdit("高透三折叠套图-透明图")
-        self.ps_resize_timeout = QSpinBox(); self.ps_resize_timeout.setRange(0, 7200); self.ps_resize_timeout.setValue(3600)
-        layout.addRow("动作组", self.ps_resize_action_set)
-        layout.addRow("动作", self.ps_resize_action_name)
-        layout.addRow("超时秒数", self.ps_resize_timeout)
-        run_btn = QPushButton("开始 PS 批处理调尺寸")
-        run_btn.clicked.connect(self._run_ps_resize_batch)
+        size_row = QWidget()
+        size_layout = QHBoxLayout(size_row)
+        size_layout.setContentsMargins(0, 0, 0, 0)
+        size_layout.setSpacing(10)
+        self.resize_width = QSpinBox(); self.resize_width.setRange(0, 12000); self.resize_width.setValue(1800)
+        self.resize_height = QSpinBox(); self.resize_height.setRange(0, 12000); self.resize_height.setValue(1800)
+        self.resize_dpi = QSpinBox(); self.resize_dpi.setRange(1, 1200); self.resize_dpi.setValue(300)
+        size_layout.addWidget(self.resize_width)
+        size_layout.addWidget(self.resize_height)
+        size_layout.addWidget(self.resize_dpi)
+        layout.addRow("宽 / 高 / DPI", size_row)
+        self.resize_mode = QComboBox()
+        self.resize_mode.addItem("留比例补边（推荐）", "contain-pad")
+        self.resize_mode.addItem("留比例裁切铺满", "cover-crop")
+        self.resize_mode.addItem("强制拉伸", "stretch")
+        self.resize_mode.addItem("仅留比例缩放", "keep-ratio")
+        layout.addRow("处理模式", self.resize_mode)
+        flags_row = QWidget()
+        flags_layout = QHBoxLayout(flags_row)
+        flags_layout.setContentsMargins(0, 0, 0, 0)
+        flags_layout.setSpacing(12)
+        self.resize_recurse = QCheckBox("递归子目录")
+        self.resize_overwrite = QCheckBox("覆盖已有输出")
+        flags_layout.addWidget(self.resize_recurse)
+        flags_layout.addWidget(self.resize_overwrite)
+        flags_layout.addStretch(1)
+        layout.addRow(flags_row)
+        run_btn = QPushButton("开始批量调尺寸")
+        run_btn.clicked.connect(self._run_resize_batch)
         layout.addRow(run_btn)
-        self.ps_resize_log = QPlainTextEdit(); self.ps_resize_log.setReadOnly(True); self.ps_resize_log.setMinimumHeight(260)
-        layout.addRow(self.ps_resize_log)
+        self.resize_log = QPlainTextEdit(); self.resize_log.setReadOnly(True); self.resize_log.setMinimumHeight(300)
+        layout.addRow(self.resize_log)
         return self._wrap_scroll(page)
 
     def _build_ps_page(self) -> QWidget:
@@ -647,49 +699,40 @@ class NeonPilotQtWindow(QMainWindow):
         layout = QVBoxLayout(page)
         terminal_card = CardFrame("Agent 工作流终端")
         self.agent_terminal = QPlainTextEdit(); self.agent_terminal.setReadOnly(True)
-        self.agent_terminal.setMinimumHeight(700)
+        self.agent_terminal.setMinimumHeight(640)
         terminal_card.body().addWidget(self.agent_terminal)
-
-        meta_toolbar = QHBoxLayout()
-        meta_toolbar.setSpacing(8)
-        self.agent_docker_badge = QLabel("Docker: --"); self.agent_docker_badge.setObjectName("StatusPill")
-        self.agent_hermes_badge = QLabel("Gateway: --"); self.agent_hermes_badge.setObjectName("StatusPill")
-        self.agent_chat_badge = QLabel("对话: --"); self.agent_chat_badge.setObjectName("StatusPill")
-        for badge in [self.agent_docker_badge, self.agent_hermes_badge, self.agent_chat_badge]:
-            badge.setFixedHeight(32)
-            badge.setMinimumWidth(120)
-            badge.setAlignment(Qt.AlignCenter)
-            meta_toolbar.addWidget(badge)
-        self.agent_status_log = QLabel("--")
-        self.agent_status_log.setObjectName("MutedLabel")
-        self.agent_status_log.setWordWrap(False)
-        self.agent_status_log.setMinimumWidth(320)
-        meta_toolbar.addWidget(self.agent_status_log, 1)
-        terminal_card.body().addLayout(meta_toolbar)
 
         composer_toolbar = QHBoxLayout()
         composer_toolbar.setSpacing(8)
+        self.agent_docker_badge = QLabel("Docker: --"); self.agent_docker_badge.setObjectName("StatusChip")
+        self.agent_hermes_badge = QLabel("Gateway: --"); self.agent_hermes_badge.setObjectName("StatusChip")
+        self.agent_chat_badge = QLabel("对话: --"); self.agent_chat_badge.setObjectName("StatusChip")
+        for badge in [self.agent_docker_badge, self.agent_hermes_badge, self.agent_chat_badge]:
+            badge.setFixedHeight(30)
+            badge.setMinimumWidth(108)
+            badge.setAlignment(Qt.AlignCenter)
+            composer_toolbar.addWidget(badge)
         self.agent_provider = QComboBox()
-        self.agent_provider.setFixedWidth(120)
+        self.agent_provider.setFixedWidth(110)
         self.agent_provider.addItems(["auto", "openai", "openrouter", "gemini", "anthropic", "xai", "ollama-cloud", "zai", "kimi-coding", "minimax", "nvidia"])
         self.agent_model = QLineEdit()
-        self.agent_model.setFixedWidth(180)
+        self.agent_model.setFixedWidth(150)
         self.agent_model.setPlaceholderText("模型")
         self.agent_base_url = QLineEdit()
         self.agent_base_url.setPlaceholderText("Base URL")
-        self.agent_base_url.setMinimumWidth(240)
+        self.agent_base_url.setMinimumWidth(210)
         self.agent_api_key = QLineEdit()
         self.agent_api_key.setEchoMode(QLineEdit.Password)
         self.agent_api_key.setPlaceholderText("API Key")
-        self.agent_api_key.setMinimumWidth(220)
+        self.agent_api_key.setMinimumWidth(170)
         save_config_btn = QPushButton("保存")
-        save_config_btn.setFixedWidth(84)
+        save_config_btn.setFixedWidth(72)
         save_config_btn.clicked.connect(self._save_agent_quick_config)
         test_api_btn = QPushButton("测试")
-        test_api_btn.setFixedWidth(84)
+        test_api_btn.setFixedWidth(72)
         test_api_btn.clicked.connect(self._test_agent_quick_config)
         help_btn = QPushButton("手册")
-        help_btn.setFixedWidth(84)
+        help_btn.setFixedWidth(72)
         help_btn.clicked.connect(self._open_agent_manual)
         composer_toolbar.addWidget(self.agent_provider)
         composer_toolbar.addWidget(self.agent_model)
@@ -700,22 +743,16 @@ class NeonPilotQtWindow(QMainWindow):
         composer_toolbar.addWidget(help_btn)
         terminal_card.body().addLayout(composer_toolbar)
 
-        self.agent_input = QPlainTextEdit(); self.agent_input.setMaximumHeight(120)
-        self.agent_input.setPlaceholderText("例如：workflow help  或  workflow run upscale-ps --input-dir \"W:\\images\" --upscale-dir \"W:\\upscaled\" --resize-dir \"W:\\resized\" --ps-output-dir \"W:\\final\" --template \"C:\\...psd\" --droplet \"C:\\...exe\"")
+        self.agent_input = QPlainTextEdit(); self.agent_input.setMaximumHeight(108)
+        self.agent_input.setPlaceholderText("例如：workflow help  或  workflow run upscale-ps --input-dir \"W:\\images\" --upscale-dir \"W:\\upscaled\" --resize-dir \"W:\\resized\" --resize-width 1800 --resize-height 1800 --resize-dpi 300 --ps-output-dir \"W:\\final\" --template \"C:\\...psd\" --droplet \"C:\\...exe\"")
         terminal_card.body().addWidget(self.agent_input)
         terminal_buttons = QHBoxLayout()
-        refresh_btn = QPushButton("刷新")
-        refresh_btn.clicked.connect(self.refresh_agent_status)
-        ready_btn = QPushButton("准备")
-        ready_btn.clicked.connect(lambda: self._execute_agent_terminal_command("agent-ready"))
         logs_btn = QPushButton("日志")
         logs_btn.clicked.connect(lambda: self._execute_agent_terminal_command("logs"))
         send_btn = QPushButton("发送命令")
         send_btn.clicked.connect(self._run_agent_terminal)
         clear_btn = QPushButton("清空终端")
         clear_btn.clicked.connect(self.agent_terminal.clear)
-        terminal_buttons.addWidget(refresh_btn)
-        terminal_buttons.addWidget(ready_btn)
         terminal_buttons.addWidget(logs_btn)
         terminal_buttons.addWidget(send_btn)
         terminal_buttons.addWidget(clear_btn)
@@ -793,26 +830,16 @@ class NeonPilotQtWindow(QMainWindow):
     def refresh_agent_status(self) -> None:
         ok, payload = execute_command(["hermes-status"])
         if not ok:
-            self.agent_docker_badge.setText("Docker: 未知")
-            self.agent_hermes_badge.setText("Gateway: 未知")
-            self.agent_chat_badge.setText("对话: 不可用")
-            self.agent_status_log.setText(str(payload))
+            self.agent_docker_badge.setText("Docker 未知")
+            self.agent_hermes_badge.setText("Gateway 未知")
+            self.agent_chat_badge.setText("对话 不可用")
             return
         docker_ok = payload.get("docker_daemon_running")
         service_ok = payload.get("service_running")
         chat_ok = payload.get("inference_ready")
-        self.agent_docker_badge.setText(f"Docker: {'已运行' if docker_ok else '未运行'}")
-        self.agent_hermes_badge.setText(f"Gateway: {'已运行' if service_ok else '未运行'}")
-        self.agent_chat_badge.setText(f"对话: {'可用' if chat_ok else '需配置 API'}")
-        self.agent_status_log.setText(
-            " · ".join(
-                [
-                    f"容器：{payload.get('container_name', '')}",
-                    f"数据目录：{payload.get('data_root', '')}",
-                    f"版本：{payload.get('version_text', '')}",
-                ]
-            )
-        )
+        self.agent_docker_badge.setText(f"Docker {'已运行' if docker_ok else '未运行'}")
+        self.agent_hermes_badge.setText(f"Gateway {'已运行' if service_ok else '未运行'}")
+        self.agent_chat_badge.setText(f"对话 {'可用' if chat_ok else '需配置 API'}")
         self._load_agent_quick_config()
 
     def _load_agent_quick_config(self) -> None:
@@ -930,19 +957,21 @@ class NeonPilotQtWindow(QMainWindow):
         self._set_busy("正在执行 Photoshop 套图")
         self._run_async(lambda: self.executor.run_photoshop_batch(request), lambda result: self._handle_execution_result(self.ps_log, result), self._show_exec_error)
 
-    def _run_ps_resize_batch(self) -> None:
-        request = PhotoshopResizeBatchRequest(
-            input_dir=self.ps_resize_input.text(),
-            output_dir=self.ps_resize_output.text(),
-            photoshop_path=self.ps_resize_exe.text(),
-            action_set=self.ps_resize_action_set.text().strip() or "默认动作",
-            action_name=self.ps_resize_action_name.text().strip() or "高透三折叠套图-透明图",
-            timeout_sec=self.ps_resize_timeout.value(),
+    def _run_resize_batch(self) -> None:
+        request = ResizeRunRequest(
+            input_dir=self.resize_input.text(),
+            output_dir=self.resize_output.text(),
+            width=self.resize_width.value(),
+            height=self.resize_height.value(),
+            dpi=self.resize_dpi.value(),
+            mode=str(self.resize_mode.currentData() or "contain-pad"),
+            recurse=self.resize_recurse.isChecked(),
+            overwrite=self.resize_overwrite.isChecked(),
         )
-        self._set_busy("正在执行 Photoshop 批处理调尺寸")
+        self._set_busy("正在批量调尺寸")
         self._run_async(
-            lambda: self.executor.run_photoshop_resize_batch(request),
-            lambda result: self._handle_execution_result(self.ps_resize_log, result),
+            lambda: self.executor.run_resize_batch(request),
+            lambda result: self._handle_execution_result(self.resize_log, result),
             self._show_exec_error,
         )
 
@@ -1036,8 +1065,9 @@ class NeonPilotQtWindow(QMainWindow):
                         "  logs",
                         "  workflow model show",
                         "  workflow model set --model <id> --provider <name> --base-url <url> --api-key <key>",
-                        "  workflow run upscale-ps --input-dir <dir> --upscale-dir <dir> --resize-dir <dir> --ps-output-dir <dir> --template <psd> --droplet <exe>",
-                        "    默认批处理动作：默认动作 / 高透三折叠套图-透明图",
+                        "  workflow run resize-batch --input-dir <dir> --output-dir <dir> --width <px> --height <px> --dpi <dpi> --mode contain-pad",
+                        "  workflow run upscale-ps --input-dir <dir> --upscale-dir <dir> --resize-dir <dir> --resize-width <px> --resize-height <px> --resize-dpi <dpi> --ps-output-dir <dir> --template <psd> --droplet <exe>",
+                        "    调尺寸阶段使用程序内原生引擎，不再依赖 Photoshop。",
                         "  workflow run background-refresh --input-dir <dir> --output-dir <dir> --subject <主体> --background <背景意愿> --style <预设>",
                         "  背景风格预设: custom / clean-ecommerce / cream-home / minimal-bathroom / outdoor-sunlit / luxury-dark",
                         "  workflow run <bridge command>",
@@ -1112,8 +1142,10 @@ class NeonPilotQtWindow(QMainWindow):
                 "--droplet": "",
                 "--photoshop": "",
                 "--scale": "2",
-                "--action-set": "默认动作",
-                "--action-name": "高透三折叠套图-透明图",
+                "--resize-width": "1800",
+                "--resize-height": "1800",
+                "--resize-dpi": "300",
+                "--resize-mode": "contain-pad",
             }
             flags = {"--recurse": False, "--overwrite": False, "--close-photoshop": False}
             key = None
@@ -1149,16 +1181,21 @@ class NeonPilotQtWindow(QMainWindow):
                 return {"ok": False, "stdout": "", "stderr": json.dumps(upscale_payload, ensure_ascii=False, indent=2)}
             resize_ok, resize_payload = execute_command(
                 [
-                    "ps-resize",
+                    "resize-batch",
                     "--input-dir",
                     mapping["--upscale-dir"],
                     "--output-dir",
                     mapping["--resize-dir"],
-                    "--action-set",
-                    mapping["--action-set"],
-                    "--action-name",
-                    mapping["--action-name"],
-                    *(["--photoshop", mapping["--photoshop"]] if mapping["--photoshop"] else []),
+                    "--width",
+                    mapping["--resize-width"],
+                    "--height",
+                    mapping["--resize-height"],
+                    "--dpi",
+                    mapping["--resize-dpi"],
+                    "--mode",
+                    mapping["--resize-mode"],
+                    *(["--recurse"] if flags["--recurse"] else []),
+                    *(["--overwrite"] if flags["--overwrite"] else []),
                 ]
             )
             if not resize_ok:
@@ -1249,6 +1286,13 @@ class NeonPilotQtWindow(QMainWindow):
                 ]
             )
             return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2), "stderr": ""}
+        direct_bridge_commands = ("resize-batch ", "upscale-batch ", "background-refresh ", "ps-batch ")
+        if lowered.startswith(direct_bridge_commands):
+            try:
+                ok, payload = execute_command(shlex.split(stripped))
+            except SystemExit as exc:
+                return {"ok": False, "stdout": "", "stderr": f"命令格式错误: {exc}"}
+            return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2), "stderr": ""}
         if lowered.startswith("workflow run "):
             bridge_command = stripped[len("workflow run ") :]
             try:
@@ -1292,8 +1336,9 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setFont(QFont("Segoe UI", 10))
-    window = NeonPilotQtWindow()
+    ui_family, display_family = load_app_fonts()
+    app.setFont(QFont(ui_family, 9))
+    window = NeonPilotQtWindow(ui_font_family=ui_family, display_font_family=display_family)
     window.show()
     sys.exit(app.exec())
 
