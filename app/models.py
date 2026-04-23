@@ -191,6 +191,15 @@ class PhotoshopBatchRequest(BaseModel):
     close_photoshop_when_done: bool = False
 
 
+class PhotoshopResizeBatchRequest(BaseModel):
+    input_dir: str
+    output_dir: str
+    photoshop_path: str = ""
+    action_set: str = "高透三折叠套图"
+    action_name: str = "透明图"
+    timeout_sec: int = 3600
+
+
 class AppSettings(BaseModel):
     agent_session_name: str = "neonpilot"
 

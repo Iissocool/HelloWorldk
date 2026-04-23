@@ -1,7 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 import time
 import winreg
 from pathlib import Path
@@ -113,3 +114,56 @@ def close_photoshop_processes(*, timeout_sec: int = 30) -> tuple[bool, str]:
             return True, combined or "已关闭 Photoshop。"
         time.sleep(0.6)
     return False, combined or "关闭 Photoshop 失败。"
+
+
+def _jsx_safe_path(path: Path) -> str:
+    return path.as_posix().replace("'", "\\'")
+
+
+def run_photoshop_action_batch(
+    input_dir: Path,
+    output_dir: Path,
+    *,
+    action_set: str,
+    action_name: str,
+    photoshop_executable: Path | None = None,
+    timeout_sec: int = 3600,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    photoshop_path = photoshop_executable or detect_photoshop_executable()
+    if not photoshop_path or not photoshop_path.exists():
+        raise FileNotFoundError("未找到 Photoshop 可执行文件。")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    jsx_content = f"""
+var inputFolder = new Folder('{_jsx_safe_path(input_dir)}');
+var outputFolder = new Folder('{_jsx_safe_path(output_dir)}');
+if (!inputFolder.exists) {{
+    throw new Error('Input folder missing: ' + inputFolder.fsName);
+}}
+if (!outputFolder.exists) {{
+    outputFolder.create();
+}}
+app.displayDialogs = DialogModes.NO;
+app.batch(inputFolder, '{action_name}', '{action_set}', undefined, outputFolder);
+app.quit();
+"""
+    with tempfile.NamedTemporaryFile("w", suffix=".jsx", delete=False, encoding="utf-8") as handle:
+        handle.write(jsx_content.strip())
+        jsx_path = Path(handle.name)
+    command = [str(photoshop_path), "-r", str(jsx_path)]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_sec,
+            check=False,
+        )
+    finally:
+        try:
+            jsx_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return completed, command

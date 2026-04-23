@@ -28,6 +28,7 @@ from .models import (
     BackgroundReplaceRunRequest,
     BatchRunRequest,
     ExecutionResult,
+    PhotoshopResizeBatchRequest,
     PhotoshopBatchRequest,
     RenameRunRequest,
     SingleRunRequest,
@@ -39,6 +40,7 @@ from .photoshop_bridge import (
     detect_photoshop_executable,
     image_count_in_directory,
     open_template_in_photoshop,
+    run_photoshop_action_batch,
     run_droplet_on_folder,
     wait_for_template_ready,
 )
@@ -662,6 +664,86 @@ class LocalExecutor:
                 model=request.model,
                 input_ref=request.prompt,
                 output_ref=request.output_dir,
+                result=result,
+            )
+        return result
+
+    def run_photoshop_resize_batch(self, request: PhotoshopResizeBatchRequest, *, log_history: bool = True) -> ExecutionResult:
+        input_dir = Path(request.input_dir)
+        output_dir = Path(request.output_dir)
+        if not input_dir.exists() or not input_dir.is_dir():
+            raise ExecutionError(f"批处理输入目录不存在：{input_dir}")
+        images = self._collect_image_outputs(input_dir)
+        if not images:
+            raise ExecutionError("当前批处理输入目录里没有可处理的图片。")
+
+        photoshop_path = Path(request.photoshop_path) if request.photoshop_path.strip() else detect_photoshop_executable()
+        try:
+            completed, command = run_photoshop_action_batch(
+                input_dir,
+                output_dir,
+                action_set=request.action_set,
+                action_name=request.action_name,
+                photoshop_executable=photoshop_path,
+                timeout_sec=request.timeout_sec,
+            )
+        except subprocess.TimeoutExpired as exc:
+            artifacts = self._collect_image_outputs(output_dir)
+            result = ExecutionResult(
+                ok=True,
+                command=["internal:ps-resize"],
+                stdout="\n".join(
+                    [
+                        f"已启动 Photoshop 批处理动作：{request.action_set} / {request.action_name}",
+                        f"输入目录：{input_dir}",
+                        f"输出目录：{output_dir}",
+                        f"当前已收集结果数：{len(artifacts)}",
+                        "Photoshop 仍在继续执行批处理。",
+                        exc.stdout or "",
+                    ]
+                ).strip(),
+                stderr=exc.stderr or "",
+                return_code=0,
+                output_path=str(output_dir),
+                backend_used="photoshop-batch",
+                model_used=f"{request.action_set}/{request.action_name}",
+                summary=f"Photoshop 批处理调尺寸已启动，当前目录 {len(images)} 张图片正在处理。",
+                artifacts=artifacts,
+            )
+        else:
+            artifacts = self._collect_image_outputs(output_dir)
+            success = completed.returncode == 0 or len(artifacts) > 0
+            result = ExecutionResult(
+                ok=success,
+                command=command,
+                stdout="\n".join(
+                    [
+                        f"已执行 Photoshop 批处理动作：{request.action_set} / {request.action_name}",
+                        f"输入目录：{input_dir}",
+                        f"输出目录：{output_dir}",
+                        f"输出结果数：{len(artifacts)}",
+                        completed.stdout or "",
+                    ]
+                ).strip(),
+                stderr=completed.stderr or "",
+                return_code=completed.returncode,
+                output_path=str(output_dir),
+                backend_used="photoshop-batch",
+                model_used=f"{request.action_set}/{request.action_name}",
+                summary=(
+                    f"Photoshop 批处理调尺寸完成，已输出 {len(artifacts)} 张图片。"
+                    if success
+                    else "Photoshop 批处理调尺寸执行失败。"
+                ),
+                artifacts=artifacts,
+            )
+        if log_history:
+            self._log_job(
+                job_type="ps_batch",
+                backend="photoshop-batch",
+                model=f"{request.action_set}/{request.action_name}",
+                input_ref=str(input_dir),
+                output_ref=str(output_dir),
                 result=result,
             )
         return result

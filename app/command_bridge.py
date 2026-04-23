@@ -30,6 +30,7 @@ from .models import (
     AIImageTestRequest,
     BackgroundReplaceRunRequest,
     BatchRunRequest,
+    PhotoshopResizeBatchRequest,
     PhotoshopBatchRequest,
     RenameRunRequest,
     SingleRunRequest,
@@ -181,6 +182,14 @@ def build_parser() -> argparse.ArgumentParser:
     ps_batch.add_argument("--timeout", type=int, default=1800)
     ps_batch.add_argument("--collect-wait", type=int, default=15)
     ps_batch.add_argument("--close-photoshop", action="store_true")
+
+    ps_resize = sub.add_parser("ps-resize", help="Run Photoshop File > Automate > Batch action")
+    ps_resize.add_argument("--input-dir", required=True)
+    ps_resize.add_argument("--output-dir", required=True)
+    ps_resize.add_argument("--photoshop", default="")
+    ps_resize.add_argument("--action-set", default="高透三折叠套图")
+    ps_resize.add_argument("--action-name", default="透明图")
+    ps_resize.add_argument("--timeout", type=int, default=3600)
     return parser
 
 
@@ -349,6 +358,19 @@ def execute_namespace(args: argparse.Namespace) -> tuple[bool, dict]:
                     timeout_sec=args.timeout,
                     collect_wait_sec=args.collect_wait,
                     close_photoshop_when_done=args.close_photoshop,
+                ),
+                log_history=False,
+            )
+            return result.ok, result.model_dump()
+        if args.command == "ps-resize":
+            result = executor.run_photoshop_resize_batch(
+                PhotoshopResizeBatchRequest(
+                    input_dir=args.input_dir,
+                    output_dir=args.output_dir,
+                    photoshop_path=args.photoshop,
+                    action_set=args.action_set,
+                    action_name=args.action_name,
+                    timeout_sec=args.timeout,
                 ),
                 log_history=False,
             )

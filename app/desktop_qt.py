@@ -41,7 +41,7 @@ from .ai_image import load_ai_settings, save_ai_settings
 from .app_settings import load_app_settings, save_app_settings
 from .catalog import MODEL_CATALOG
 from .command_bridge import execute_command
-from .config import APP_NAME, APP_TAGLINE, APP_VERSION, BACKGROUND_PNG, ICON_ICO
+from .config import APP_NAME, APP_TAGLINE, APP_VERSION, BACKGROUND_PNG, DOCS_ROOT, ICON_ICO
 from .executor import ExecutionError, LocalExecutor, ModelMissingError, RuntimeMissingError
 from .hardware import detect_hardware_profile
 from .hermes_adapter import (
@@ -53,6 +53,7 @@ from .models import (
     AIImageRunRequest,
     AIImageTestRequest,
     BatchRunRequest,
+    PhotoshopResizeBatchRequest,
     PhotoshopBatchRequest,
     RenameRunRequest,
     SingleRunRequest,
@@ -552,6 +553,8 @@ class NeonPilotQtWindow(QMainWindow):
 
     def _build_ps_page(self) -> QWidget:
         page = QWidget(); layout = QFormLayout(page)
+        self.ps_resize_action_set = QLineEdit("高透三折叠套图")
+        self.ps_resize_action_name = QLineEdit("透明图")
         self.ps_template, row = self._path_row("选择模板 PSD", default=r"C:\Users\F1736\Desktop\模板\昔音浴帘.psd", filter_text="Photoshop PSD (*.psd);;All Files (*)")
         layout.addRow("模板 PSD", row)
         self.ps_droplet, row = self._path_row("选择 Droplet 程序", default=r"C:\Users\F1736\Desktop\自动套图 图标.exe", filter_text="Executable (*.exe);;All Files (*)")
@@ -561,19 +564,28 @@ class NeonPilotQtWindow(QMainWindow):
         layout.addRow("Photoshop", row)
         self.ps_input, row = self._path_row("选择素材目录", folder=True)
         layout.addRow("素材目录", row)
+        self.ps_resize_output, row = self._path_row("选择调尺寸输出目录", folder=True)
+        layout.addRow("调尺寸输出目录", row)
         self.ps_output, row = self._path_row("选择结果收集目录", folder=True)
         layout.addRow("结果收集目录", row)
         self.ps_wait = QSpinBox(); self.ps_wait.setRange(0, 120); self.ps_wait.setValue(8)
         self.ps_timeout = QSpinBox(); self.ps_timeout.setRange(0, 7200); self.ps_timeout.setValue(1800)
         self.ps_collect_wait = QSpinBox(); self.ps_collect_wait.setRange(0, 600); self.ps_collect_wait.setValue(15)
         self.ps_close = QCheckBox("执行完成后自动关闭 Photoshop")
+        layout.addRow("批处理动作组", self.ps_resize_action_set)
+        layout.addRow("批处理动作名", self.ps_resize_action_name)
         layout.addRow("模板等待秒数", self.ps_wait)
         layout.addRow("Droplet 超时秒数", self.ps_timeout)
         layout.addRow("结果收集等待秒数", self.ps_collect_wait)
         layout.addRow(self.ps_close)
-        btn = QPushButton("开始 Photoshop 套图")
-        btn.clicked.connect(self._run_ps_batch)
-        layout.addRow(btn)
+        button_row = QHBoxLayout()
+        resize_btn = QPushButton("先调尺寸")
+        resize_btn.clicked.connect(self._run_ps_resize_batch)
+        batch_btn = QPushButton("开始 Photoshop 套图")
+        batch_btn.clicked.connect(self._run_ps_batch)
+        button_row.addWidget(resize_btn)
+        button_row.addWidget(batch_btn)
+        layout.addRow(button_row)
         self.ps_log = QPlainTextEdit(); self.ps_log.setReadOnly(True); self.ps_log.setMinimumHeight(260)
         layout.addRow(self.ps_log)
         return self._wrap_scroll(page)
@@ -660,16 +672,20 @@ class NeonPilotQtWindow(QMainWindow):
         test_api_btn = QPushButton("测试")
         test_api_btn.setFixedWidth(84)
         test_api_btn.clicked.connect(self._test_agent_quick_config)
+        help_btn = QPushButton("手册")
+        help_btn.setFixedWidth(84)
+        help_btn.clicked.connect(self._open_agent_manual)
         composer_toolbar.addWidget(self.agent_provider)
         composer_toolbar.addWidget(self.agent_model)
         composer_toolbar.addWidget(self.agent_base_url, 1)
         composer_toolbar.addWidget(self.agent_api_key)
         composer_toolbar.addWidget(save_config_btn)
         composer_toolbar.addWidget(test_api_btn)
+        composer_toolbar.addWidget(help_btn)
         terminal_card.body().addLayout(composer_toolbar)
 
         self.agent_input = QPlainTextEdit(); self.agent_input.setMaximumHeight(120)
-        self.agent_input.setPlaceholderText("例如：workflow help  或  workflow run upscale-ps --input-dir \"W:\\images\" --upscale-dir \"W:\\upscaled\" --ps-output-dir \"W:\\final\" --template \"C:\\...psd\" --droplet \"C:\\...exe\"")
+        self.agent_input.setPlaceholderText("例如：workflow help  或  workflow run upscale-ps --input-dir \"W:\\images\" --upscale-dir \"W:\\upscaled\" --resize-dir \"W:\\resized\" --ps-output-dir \"W:\\final\" --template \"C:\\...psd\" --droplet \"C:\\...exe\"")
         terminal_card.body().addWidget(self.agent_input)
         terminal_buttons = QHBoxLayout()
         refresh_btn = QPushButton("刷新")
@@ -838,6 +854,13 @@ class NeonPilotQtWindow(QMainWindow):
         self.agent_terminal.appendPlainText(f"[workflow]\n{message}\n")
         self._set_ready("API 测试完成" if ok else "API 测试失败")
 
+    def _open_agent_manual(self) -> None:
+        manual_path = DOCS_ROOT / "Agent_中文使用手册.md"
+        if not manual_path.exists():
+            self._show_error(f"未找到 Agent 手册：{manual_path}")
+            return
+        os.startfile(str(manual_path))
+
     def _handle_execution_result(self, box: QPlainTextEdit, result) -> None:
         self._set_ready(result.summary or "执行完成")
         parts = [result.summary or "", result.stdout or "", result.stderr or ""]
@@ -890,6 +913,21 @@ class NeonPilotQtWindow(QMainWindow):
         request = PhotoshopBatchRequest(template_path=self.ps_template.text(), droplet_path=self.ps_droplet.text(), input_dir=self.ps_input.text(), output_dir=self.ps_output.text(), photoshop_path=self.ps_exe.text(), template_wait_sec=self.ps_wait.value(), timeout_sec=self.ps_timeout.value(), collect_wait_sec=self.ps_collect_wait.value(), close_photoshop_when_done=self.ps_close.isChecked())
         self._set_busy("正在执行 Photoshop 套图")
         self._run_async(lambda: self.executor.run_photoshop_batch(request), lambda result: self._handle_execution_result(self.ps_log, result), self._show_exec_error)
+
+    def _run_ps_resize_batch(self) -> None:
+        request = PhotoshopResizeBatchRequest(
+            input_dir=self.ps_input.text(),
+            output_dir=self.ps_resize_output.text(),
+            photoshop_path=self.ps_exe.text(),
+            action_set=self.ps_resize_action_set.text().strip() or "高透三折叠套图",
+            action_name=self.ps_resize_action_name.text().strip() or "透明图",
+        )
+        self._set_busy("正在执行 Photoshop 批处理调尺寸")
+        self._run_async(
+            lambda: self.executor.run_photoshop_resize_batch(request),
+            lambda result: self._handle_execution_result(self.ps_log, result),
+            self._show_exec_error,
+        )
 
     def _run_upscale_batch(self) -> None:
         request = UpscaleRunRequest(
@@ -981,7 +1019,7 @@ class NeonPilotQtWindow(QMainWindow):
                         "  logs",
                         "  workflow model show",
                         "  workflow model set --model <id> --provider <name> --base-url <url> --api-key <key>",
-                        "  workflow run upscale-ps --input-dir <dir> --upscale-dir <dir> --ps-output-dir <dir> --template <psd> --droplet <exe>",
+                        "  workflow run upscale-ps --input-dir <dir> --upscale-dir <dir> --resize-dir <dir> --ps-output-dir <dir> --template <psd> --droplet <exe>",
                         "  workflow run background-refresh --input-dir <dir> --output-dir <dir> --subject <主体> --background <背景意愿> --style <预设>",
                         "  背景风格预设: custom / clean-ecommerce / cream-home / minimal-bathroom / outdoor-sunlit / luxury-dark",
                         "  workflow run <bridge command>",
@@ -1050,11 +1088,14 @@ class NeonPilotQtWindow(QMainWindow):
             mapping = {
                 "--input-dir": "",
                 "--upscale-dir": "",
+                "--resize-dir": "",
                 "--ps-output-dir": "",
                 "--template": "",
                 "--droplet": "",
                 "--photoshop": "",
                 "--scale": "2",
+                "--action-set": "高透三折叠套图",
+                "--action-name": "透明图",
             }
             flags = {"--recurse": False, "--overwrite": False, "--close-photoshop": False}
             key = None
@@ -1068,7 +1109,7 @@ class NeonPilotQtWindow(QMainWindow):
                 if key:
                     mapping[key] = token
                     key = None
-            missing = [item for item in ["--input-dir", "--upscale-dir", "--template", "--droplet"] if not mapping[item]]
+            missing = [item for item in ["--input-dir", "--upscale-dir", "--resize-dir", "--template", "--droplet"] if not mapping[item]]
             if missing:
                 return {"ok": False, "stdout": "", "stderr": f"缺少参数：{', '.join(missing)}"}
             upscale_ok, upscale_payload = execute_command(
@@ -1088,6 +1129,26 @@ class NeonPilotQtWindow(QMainWindow):
             )
             if not upscale_ok:
                 return {"ok": False, "stdout": "", "stderr": json.dumps(upscale_payload, ensure_ascii=False, indent=2)}
+            resize_ok, resize_payload = execute_command(
+                [
+                    "ps-resize",
+                    "--input-dir",
+                    mapping["--upscale-dir"],
+                    "--output-dir",
+                    mapping["--resize-dir"],
+                    "--action-set",
+                    mapping["--action-set"],
+                    "--action-name",
+                    mapping["--action-name"],
+                    *(["--photoshop", mapping["--photoshop"]] if mapping["--photoshop"] else []),
+                ]
+            )
+            if not resize_ok:
+                return {
+                    "ok": False,
+                    "stdout": "转高清结果：\n" + json.dumps(upscale_payload, ensure_ascii=False, indent=2),
+                    "stderr": json.dumps(resize_payload, ensure_ascii=False, indent=2),
+                }
             ps_argv = [
                 "ps-batch",
                 "--template",
@@ -1095,7 +1156,7 @@ class NeonPilotQtWindow(QMainWindow):
                 "--droplet",
                 mapping["--droplet"],
                 "--input-dir",
-                mapping["--upscale-dir"],
+                mapping["--resize-dir"],
             ]
             if mapping["--ps-output-dir"]:
                 ps_argv.extend(["--output-dir", mapping["--ps-output-dir"]])
@@ -1108,6 +1169,8 @@ class NeonPilotQtWindow(QMainWindow):
                 "ok": ps_ok,
                 "stdout": "转高清结果：\n"
                 + json.dumps(upscale_payload, ensure_ascii=False, indent=2)
+                + "\n\n调尺寸结果：\n"
+                + json.dumps(resize_payload, ensure_ascii=False, indent=2)
                 + "\n\nPhotoshop 结果：\n"
                 + json.dumps(ps_payload, ensure_ascii=False, indent=2),
                 "stderr": "",
