@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
-import csv
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -97,6 +97,7 @@ class ModelMissingError(ExecutionError):
 class LocalExecutor:
     def __init__(self, history_store: HistoryStore | None = None) -> None:
         self.history_store = history_store or HistoryStore()
+        self._creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
     def available_backends(self) -> list[str]:
         ordered = ["auto", "directml", "amd", "openvino", "cuda", "tensorrt", "cpu"]
@@ -190,6 +191,7 @@ class LocalExecutor:
             encoding="utf-8",
             errors="replace",
             check=False,
+            creationflags=self._creationflags,
         )
         return ExecutionResult(
             ok=completed.returncode == 0,
@@ -221,6 +223,30 @@ class LocalExecutor:
     def _output_path_for_input(self, output_dir: Path, input_path: Path, input_root: Path) -> Path:
         relative_path = input_path.relative_to(input_root)
         return output_dir / relative_path.with_suffix(".png")
+
+    def _resolve_single_output_path(self, input_path: Path, output_text: str) -> Path:
+        raw = output_text.strip()
+        if not raw:
+            raise ExecutionError("请填写输出路径。")
+        candidate = Path(raw)
+        treat_as_dir = (
+            raw.endswith(("\\", "/"))
+            or (candidate.exists() and candidate.is_dir())
+            or candidate.suffix == ""
+        )
+        if treat_as_dir:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate / f"{input_path.stem}.png"
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        return candidate
+
+    def _ensure_distinct_output_dir(self, input_dir: Path, output_dir: Path, *, label: str = "输出目录") -> None:
+        try:
+            same = input_dir.resolve() == output_dir.resolve()
+        except OSError:
+            same = input_dir == output_dir
+        if same:
+            raise ExecutionError(f"{label}不能和输入目录相同。请另外选择一个输出目录。")
 
     def _should_skip_generated(self, path: Path) -> bool:
         lower_name = path.stem.lower()
@@ -278,7 +304,6 @@ class LocalExecutor:
         self,
         *,
         job_type: str,
-        report_path: Path,
         rows: list[dict[str, str]],
         stdout_lines: list[str],
         backends_used: Iterable[str],
@@ -300,28 +325,37 @@ class LocalExecutor:
             stdout="\n".join(stdout_lines),
             stderr="",
             return_code=0 if fail_count == 0 else 1,
-            report_path=str(report_path),
             backend_used=backend_values[0] if len(backend_values) == 1 else ("mixed" if backend_values else None),
             model_used=model_values[0] if len(model_values) == 1 else ("multiple" if model_values else None),
             summary=summary,
         )
 
     def run_single(self, request: SingleRunRequest, *, log_history: bool = True) -> ExecutionResult:
+        input_path = Path(request.input_path)
+        if not input_path.is_file():
+            raise ExecutionError(f"输入图片不存在：{input_path}")
         self._ensure_model_available(request.model)
         backend = self.resolve_backend(request.backend, request.model)
+        resolved_output_path = self._resolve_single_output_path(input_path, request.output_path)
+        request = request.model_copy(update={"output_path": str(resolved_output_path)})
         command = self._build_single_command(backend, request)
         result = self._run(command)
-        result.output_path = request.output_path
+        result.output_path = str(resolved_output_path)
+        result.artifacts = [str(resolved_output_path)] if resolved_output_path.exists() else []
         result.backend_used = backend
         result.model_used = request.model
-        result.summary = self._summarize_single(result)
+        result.summary = (
+            f"单图抠图完成：{input_path.name}"
+            if result.ok
+            else f"单图抠图失败：{input_path.name}"
+        )
         if log_history:
             self._log_job(
                 job_type="single",
                 backend=backend,
                 model=request.model,
-                input_ref=request.input_path,
-                output_ref=request.output_path,
+                input_ref=str(input_path),
+                output_ref=str(resolved_output_path),
                 result=result,
             )
         return result
@@ -331,6 +365,7 @@ class LocalExecutor:
         output_dir = Path(request.output_dir)
         if not input_dir.is_dir():
             raise ExecutionError(f"Input directory does not exist: {input_dir}")
+        self._ensure_distinct_output_dir(input_dir, output_dir)
         self._ensure_model_available(request.model)
 
         images = self._image_paths_from_dir(input_dir, request.recurse, request.include_generated)
@@ -397,24 +432,16 @@ class LocalExecutor:
                     }
                 )
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        report_path = output_dir / "_batch_report.csv"
-        with report_path.open("w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=["input", "output", "model", "backend", "status", "reason"],
-            )
-            writer.writeheader()
-            writer.writerows(rows)
-
         result = self._aggregate_result(
             job_type="batch",
-            report_path=report_path,
             rows=rows,
-            stdout_lines=stdout_lines + [f"Report: {report_path}"],
+            stdout_lines=stdout_lines,
             backends_used=[backend],
             models_used=[request.model],
         )
+        result.output_path = str(output_dir)
+        result.artifacts = self._collect_image_outputs(output_dir)
+        result.summary = f"固定批处理完成，成功 {sum(1 for row in rows if row['status'] == 'ok')} 张。"
         if log_history:
             self._log_job(
                 job_type="batch",
@@ -431,6 +458,7 @@ class LocalExecutor:
         output_dir = Path(request.output_dir)
         if not input_dir.is_dir():
             raise ExecutionError(f"Input directory does not exist: {input_dir}")
+        self._ensure_distinct_output_dir(input_dir, output_dir)
 
         images = self._image_paths_from_dir(input_dir, request.recurse, request.include_generated)
         if not images:
@@ -513,24 +541,16 @@ class LocalExecutor:
                     }
                 )
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        report_path = output_dir / "_smart_report.csv"
-        with report_path.open("w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=["input", "output", "strategy", "category", "model", "backend", "status", "reason"],
-            )
-            writer.writeheader()
-            writer.writerows(rows)
-
         result = self._aggregate_result(
             job_type="smart",
-            report_path=report_path,
             rows=rows,
-            stdout_lines=stdout_lines + [f"Report: {report_path}"],
+            stdout_lines=stdout_lines,
             backends_used=backends_used,
             models_used=models_used,
         )
+        result.output_path = str(output_dir)
+        result.artifacts = self._collect_image_outputs(output_dir)
+        result.summary = f"智能批处理完成，成功 {sum(1 for row in rows if row['status'] == 'ok')} 张。"
         if log_history:
             backend_label = result.backend_used or request.backend
             model_label = result.model_used or "multiple"
@@ -571,30 +591,19 @@ class LocalExecutor:
                 }
             )
 
-        report_path = input_dir / "_rename_report.csv"
-        with report_path.open("w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=["input", "output", "model", "backend", "status", "reason"],
-            )
-            writer.writeheader()
-            writer.writerows(rows)
-
         success_count = sum(1 for row in rows if row["status"] == "ok")
         fail_count = sum(1 for row in rows if row["status"] == "fail")
         skip_count = sum(1 for row in rows if row["status"] == "skipped")
         result = ExecutionResult(
             ok=fail_count == 0,
             command=["internal:rename"],
-            stdout="\n".join(stdout_lines + [f"Report: {report_path}"]),
+            stdout="\n".join(stdout_lines),
             stderr="",
             return_code=0 if fail_count == 0 else 1,
-            report_path=str(report_path),
             backend_used="internal",
             model_used=f"rename:{request.mode}",
             summary=(
-                f"rename processed {len(rows)} files: "
-                f"{success_count} renamed, {fail_count} failed, {skip_count} skipped."
+                f"批量命名完成：成功 {success_count} 个，失败 {fail_count} 个，跳过 {skip_count} 个。"
             ),
         )
         if log_history:
@@ -674,6 +683,7 @@ class LocalExecutor:
         output_dir = Path(request.output_dir)
         if not input_dir.is_dir():
             raise ExecutionError(f"输入目录不存在：{input_dir}")
+        self._ensure_distinct_output_dir(input_dir, output_dir)
         if request.width <= 0 and request.height <= 0:
             raise ExecutionError("宽度和高度不能同时为空。")
         if request.dpi <= 0:
@@ -724,21 +734,10 @@ class LocalExecutor:
                 f"[{index}/{len(images)}] ok {relative} -> {summary.width}x{summary.height} @ {summary.dpi_x or request.dpi}dpi ({summary.mode})"
             )
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        report_path = output_dir / "_resize_report.csv"
-        with report_path.open("w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=["input", "output", "model", "backend", "status", "reason"],
-            )
-            writer.writeheader()
-            writer.writerows(rows)
-
         result = self._aggregate_result(
             job_type="resize",
-            report_path=report_path,
             rows=rows,
-            stdout_lines=stdout_lines + [f"Report: {report_path}"],
+            stdout_lines=stdout_lines,
             backends_used=["pillow-native"],
             models_used=[f"resize:{request.mode}"],
         )
@@ -884,6 +883,7 @@ class LocalExecutor:
         output_dir = Path(request.output_dir)
         if not input_dir.is_dir():
             raise ExecutionError(f"输入目录不存在：{input_dir}")
+        self._ensure_distinct_output_dir(input_dir, output_dir)
         if request.scale not in {2, 4}:
             raise ExecutionError("当前转高清仅支持 2x 或 4x。")
 
@@ -894,6 +894,7 @@ class LocalExecutor:
         rows: list[dict[str, str]] = []
         stdout_lines: list[str] = []
         engine_label = "realesrgan-ncnn-vulkan" if external_upscale_available() else "internal-fallback"
+        engines_used: list[str] = []
         for index, input_path in enumerate(images, start=1):
             relative = input_path.relative_to(input_dir)
             output_path = output_dir / relative
@@ -911,6 +912,7 @@ class LocalExecutor:
                 stdout_lines.append(f"[{index}/{len(images)}] skip {relative}")
                 continue
             summary = upscale_image(input_path, output_path, scale=request.scale, mode=request.mode)
+            engines_used.append(summary.engine)
             rows.append(
                 {
                     "input": summary.input_path,
@@ -923,24 +925,16 @@ class LocalExecutor:
             )
             stdout_lines.append(f"[{index}/{len(images)}] ok {relative} -> {request.scale}x ({summary.engine})")
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        report_path = output_dir / "_upscale_report.csv"
-        with report_path.open("w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=["input", "output", "model", "backend", "status", "reason"],
-            )
-            writer.writeheader()
-            writer.writerows(rows)
-
         result = self._aggregate_result(
             job_type="upscale",
-            report_path=report_path,
             rows=rows,
-            stdout_lines=stdout_lines + [f"Report: {report_path}"],
-            backends_used=[engine_label],
+            stdout_lines=stdout_lines,
+            backends_used=engines_used or [engine_label],
             models_used=[f"upscale:{request.mode}"],
         )
+        result.output_path = str(output_dir)
+        result.artifacts = self._collect_image_outputs(output_dir)
+        result.summary = f"高清增强完成，成功 {sum(1 for row in rows if row['status'] == 'ok')} 张。"
         if log_history:
             self._log_job(
                 job_type="upscale",
@@ -957,6 +951,7 @@ class LocalExecutor:
         output_dir = Path(request.output_dir)
         if not input_dir.is_dir():
             raise ExecutionError(f"输入目录不存在：{input_dir}")
+        self._ensure_distinct_output_dir(input_dir, output_dir)
         if not request.subject_name.strip():
             raise ExecutionError("请填写主体商品说明。")
         if not request.background_prompt.strip():
@@ -1078,24 +1073,16 @@ class LocalExecutor:
                 )
                 stdout_lines.append(f"[{index}/{len(images)}] ok {relative} -> 背景已替换")
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        report_path = output_dir / "_background_replace_report.csv"
-        with report_path.open("w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=["input", "output", "model", "backend", "status", "reason"],
-            )
-            writer.writeheader()
-            writer.writerows(rows)
-
         result = self._aggregate_result(
             job_type="background_replace",
-            report_path=report_path,
             rows=rows,
-            stdout_lines=stdout_lines + [f"Report: {report_path}"],
+            stdout_lines=stdout_lines,
             backends_used=[f"{matt_backend}+openai-compatible"],
             models_used=[ai_settings.model],
         )
+        result.output_path = str(output_dir)
+        result.artifacts = self._collect_image_outputs(output_dir)
+        result.summary = f"背景替换完成，成功 {sum(1 for row in rows if row['status'] == 'ok')} 张。"
         if log_history:
             self._log_job(
                 job_type="background_replace",

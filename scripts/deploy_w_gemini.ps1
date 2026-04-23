@@ -14,6 +14,7 @@ if (-not (Test-Path $portableSource)) {
 $workspaceRoot = (Resolve-Path $WorkspaceRoot).Path
 $appRoot = Join-Path $workspaceRoot "apps\NeonPilot"
 $installerRoot = Join-Path $appRoot "installer"
+$appScriptsRoot = Join-Path $appRoot "scripts"
 $docsRoot = Join-Path $workspaceRoot "docs"
 $hermesRoot = Join-Path $workspaceRoot "data\neonpilot\hermes"
 $legacyTargets = @(
@@ -46,18 +47,22 @@ if (Test-Path $appRoot) {
 }
 New-Item -ItemType Directory -Force -Path $appRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $docsRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $appScriptsRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $hermesRoot | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $hermesRoot "skills") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $hermesRoot "logs") | Out-Null
 
-Copy-Item -Path (Join-Path $portableSource "*") -Destination $appRoot -Recurse -Force
+$null = robocopy $portableSource $appRoot /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NC /NS
+if ($LASTEXITCODE -gt 7) {
+  throw "robocopy failed with exit code $LASTEXITCODE"
+}
 New-Item -ItemType Directory -Force -Path $installerRoot | Out-Null
 if (Test-Path $installerSource) {
   Copy-Item -Path $installerSource -Destination (Join-Path $installerRoot "NeonPilot-Setup.exe") -Force
 }
 Copy-Item -Path (Join-Path $repoRoot "docs\*") -Destination $docsRoot -Recurse -Force
-Copy-Item -Path (Join-Path $repoRoot "scripts\run_resize_batch.ps1") -Destination (Join-Path $appRoot "scripts\run_resize_batch.ps1") -Force
-Copy-Item -Path (Join-Path $repoRoot "scripts\run_ps_resize_batch.ps1") -Destination (Join-Path $appRoot "scripts\run_ps_resize_batch.ps1") -Force
+Copy-Item -Path (Join-Path $repoRoot "scripts\run_resize_batch.ps1") -Destination (Join-Path $appScriptsRoot "run_resize_batch.ps1") -Force
+Copy-Item -Path (Join-Path $repoRoot "scripts\run_ps_resize_batch.ps1") -Destination (Join-Path $appScriptsRoot "run_ps_resize_batch.ps1") -Force
 
 $psLauncher = @(
   '$ErrorActionPreference = "Stop"',

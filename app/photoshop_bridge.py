@@ -14,6 +14,7 @@ PHOTOSHOP_REGISTRY_KEYS = [
     r"SOFTWARE\Adobe\Photoshop",
     r"SOFTWARE\WOW6432Node\Adobe\Photoshop",
 ]
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
 
 def detect_photoshop_executable() -> Path | None:
@@ -62,7 +63,7 @@ def open_template_in_photoshop(template_path: Path, photoshop_executable: Path |
     photoshop_path = resolve_photoshop_executable(photoshop_executable) if photoshop_executable else detect_photoshop_executable()
     if photoshop_path and photoshop_path.exists():
         command = [str(photoshop_path), str(template_path)]
-        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
         return command, str(photoshop_path)
     os.startfile(str(template_path))
     return [str(template_path)], "system-association"
@@ -76,7 +77,7 @@ def run_droplet_on_folder(
 ) -> subprocess.CompletedProcess[str] | None:
     command = [str(droplet_path), str(input_dir)]
     if timeout_sec <= 0:
-        subprocess.Popen(command)
+        subprocess.Popen(command, creationflags=CREATE_NO_WINDOW)
         return None
     return subprocess.run(
         command,
@@ -86,6 +87,7 @@ def run_droplet_on_folder(
         errors="replace",
         timeout=timeout_sec,
         check=False,
+        creationflags=CREATE_NO_WINDOW,
     )
 
 
@@ -103,6 +105,7 @@ def close_photoshop_processes(*, timeout_sec: int = 30) -> tuple[bool, str]:
         errors="replace",
         timeout=timeout_sec,
         check=False,
+        creationflags=CREATE_NO_WINDOW,
     )
     stdout = (completed.stdout or "").strip()
     stderr = (completed.stderr or "").strip()
@@ -121,6 +124,7 @@ def close_photoshop_processes(*, timeout_sec: int = 30) -> tuple[bool, str]:
             errors="replace",
             timeout=10,
             check=False,
+            creationflags=CREATE_NO_WINDOW,
         )
         listing = (probe.stdout or "") + (probe.stderr or "")
         if "Photoshop.exe" not in listing:
@@ -188,6 +192,7 @@ app.quit();
             errors="replace",
             timeout=timeout_sec,
             check=False,
+            creationflags=CREATE_NO_WINDOW,
         )
     finally:
         try:

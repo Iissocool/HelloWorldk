@@ -25,7 +25,9 @@ def _discover_workspace_root() -> Path:
     candidates: list[Path] = []
     if env_root:
         candidates.append(Path(env_root))
-    candidates.extend([PROJECT_ROOT, PROJECT_ROOT.parent, PROJECT_ROOT.parent.parent, Path("W:/gemini")])
+    if Path("W:/gemini").exists():
+        candidates.append(Path("W:/gemini"))
+    candidates.extend([PROJECT_ROOT, PROJECT_ROOT.parent, PROJECT_ROOT.parent.parent])
 
     seen: set[Path] = set()
     for candidate in candidates:

@@ -323,6 +323,19 @@ class NeonPilotQtWindow(QMainWindow):
         layout.addWidget(button)
         return edit, container
 
+    def _result_label(self, text: str = "等待执行") -> QLabel:
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setObjectName("MutedLabel")
+        label.setStyleSheet(
+            "background: rgba(8, 18, 30, 0.55);"
+            "border: 1px solid rgba(105, 190, 255, 0.18);"
+            "border-radius: 12px;"
+            "padding: 10px 12px;"
+            "color: #dceeff;"
+        )
+        return label
+
     def _status_card(self, title: str, value: str) -> CardFrame:
         card = CardFrame(title)
         value_label = QLabel(value)
@@ -430,7 +443,7 @@ class NeonPilotQtWindow(QMainWindow):
         single_layout.setSpacing(12)
         self.single_in, row = self._path_row("选择输入图片")
         single_layout.addRow("输入图片", row)
-        self.single_out, row = self._path_row("选择输出图片", filter_text="PNG Files (*.png);;All Files (*)")
+        self.single_out, row = self._path_row("选择输出图片或输出目录", filter_text="PNG Files (*.png);;All Files (*)")
         single_layout.addRow("输出图片", row)
         self.single_model = QComboBox(); self.single_model.addItems([spec.id for spec in MODEL_CATALOG]); self.single_model.setCurrentText("bria-rmbg")
         self.single_backend = QComboBox(); self.single_backend.addItems(self.executor.available_backends())
@@ -439,8 +452,8 @@ class NeonPilotQtWindow(QMainWindow):
         single_button = QPushButton("执行单图抠图")
         single_button.clicked.connect(self._run_single)
         single_layout.addRow(single_button)
-        self.single_log = QPlainTextEdit(); self.single_log.setReadOnly(True); self.single_log.setMinimumHeight(220)
-        single_layout.addRow(self.single_log)
+        self.single_result = self._result_label("支持直接填写输出目录，程序会自动生成 PNG 文件。")
+        single_layout.addRow(self.single_result)
         tabs.addTab(single_page, "单图处理")
 
         batch_page = QWidget()
@@ -460,8 +473,8 @@ class NeonPilotQtWindow(QMainWindow):
         batch_button = QPushButton("执行固定批处理")
         batch_button.clicked.connect(self._run_batch)
         batch_layout.addRow(batch_button)
-        self.batch_log = QPlainTextEdit(); self.batch_log.setReadOnly(True); self.batch_log.setMinimumHeight(220)
-        batch_layout.addRow(self.batch_log)
+        self.batch_result = self._result_label()
+        batch_layout.addRow(self.batch_result)
         tabs.addTab(batch_page, "固定批处理")
 
         smart_page = QWidget()
@@ -481,8 +494,8 @@ class NeonPilotQtWindow(QMainWindow):
         smart_button = QPushButton("执行智能批处理")
         smart_button.clicked.connect(self._run_smart)
         smart_layout.addRow(smart_button)
-        self.smart_log = QPlainTextEdit(); self.smart_log.setReadOnly(True); self.smart_log.setMinimumHeight(220)
-        smart_layout.addRow(self.smart_log)
+        self.smart_result = self._result_label()
+        smart_layout.addRow(self.smart_result)
         tabs.addTab(smart_page, "智能批处理")
         return tabs
 
@@ -581,8 +594,8 @@ class NeonPilotQtWindow(QMainWindow):
         run_btn = QPushButton("开始转高清")
         run_btn.clicked.connect(self._run_upscale_batch)
         layout.addRow(run_btn)
-        self.upscale_log = QPlainTextEdit(); self.upscale_log.setReadOnly(True); self.upscale_log.setMinimumHeight(280)
-        layout.addRow(self.upscale_log)
+        self.upscale_result = self._result_label("请选择不同的输出目录，程序会静默执行并直接给出结果。")
+        layout.addRow(self.upscale_result)
         return self._wrap_scroll(page)
 
     def _build_resize_page(self) -> QWidget:
@@ -626,8 +639,8 @@ class NeonPilotQtWindow(QMainWindow):
         run_btn = QPushButton("开始批量调尺寸")
         run_btn.clicked.connect(self._run_resize_batch)
         layout.addRow(run_btn)
-        self.resize_log = QPlainTextEdit(); self.resize_log.setReadOnly(True); self.resize_log.setMinimumHeight(300)
-        layout.addRow(self.resize_log)
+        self.resize_result = self._result_label()
+        layout.addRow(self.resize_result)
         return self._wrap_scroll(page)
 
     def _build_ps_page(self) -> QWidget:
@@ -654,8 +667,8 @@ class NeonPilotQtWindow(QMainWindow):
         batch_btn = QPushButton("开始 Photoshop 套图")
         batch_btn.clicked.connect(self._run_ps_batch)
         layout.addRow(batch_btn)
-        self.ps_log = QPlainTextEdit(); self.ps_log.setReadOnly(True); self.ps_log.setMinimumHeight(260)
-        layout.addRow(self.ps_log)
+        self.ps_result = self._result_label()
+        layout.addRow(self.ps_result)
         return self._wrap_scroll(page)
 
     def _build_resources_page(self) -> QWidget:
@@ -904,27 +917,38 @@ class NeonPilotQtWindow(QMainWindow):
             return
         os.startfile(str(manual_path))
 
-    def _handle_execution_result(self, box: QPlainTextEdit, result) -> None:
+    def _format_result_message(self, result) -> str:
+        parts = [result.summary or ("执行完成" if result.ok else "执行失败")]
+        if result.output_path:
+            parts.append(f"输出位置：{result.output_path}")
+        elif result.artifacts:
+            parts.append(f"输出数量：{len(result.artifacts)}")
+        return "\n".join(parts)
+
+    def _handle_execution_result(self, box: QWidget, result) -> None:
         self._set_ready(result.summary or "执行完成")
-        parts = [result.summary or "", result.stdout or "", result.stderr or ""]
-        box.setPlainText("\n\n".join(part for part in parts if part))
+        message = self._format_result_message(result)
+        if isinstance(box, QPlainTextEdit):
+            box.setPlainText(message)
+        elif isinstance(box, QLabel):
+            box.setText(message)
         self.refresh_history()
         self.refresh_resources()
 
     def _run_single(self) -> None:
         request = SingleRunRequest(input_path=self.single_in.text(), output_path=self.single_out.text(), model=self.single_model.currentText(), backend=self.single_backend.currentText())
         self._set_busy("正在执行单图抠图")
-        self._run_async(lambda: self.executor.run_single(request), lambda result: self._handle_execution_result(self.single_log, result), self._show_exec_error)
+        self._run_async(lambda: self.executor.run_single(request), lambda result: self._handle_execution_result(self.single_result, result), self._show_exec_error)
 
     def _run_batch(self) -> None:
         request = BatchRunRequest(input_dir=self.batch_in.text(), output_dir=self.batch_out.text(), model=self.batch_model.currentText(), backend=self.batch_backend.currentText(), overwrite=self.batch_overwrite.isChecked(), recurse=self.batch_recurse.isChecked())
         self._set_busy("正在执行固定批处理")
-        self._run_async(lambda: self.executor.run_batch(request), lambda result: self._handle_execution_result(self.batch_log, result), self._show_exec_error)
+        self._run_async(lambda: self.executor.run_batch(request), lambda result: self._handle_execution_result(self.batch_result, result), self._show_exec_error)
 
     def _run_smart(self) -> None:
         request = SmartRunRequest(input_dir=self.smart_in.text(), output_dir=self.smart_out.text(), strategy=self.smart_strategy.currentText(), backend=self.smart_backend.currentText(), overwrite=self.smart_overwrite.isChecked(), recurse=self.smart_recurse.isChecked())
         self._set_busy("正在执行智能批处理")
-        self._run_async(lambda: self.executor.run_smart(request), lambda result: self._handle_execution_result(self.smart_log, result), self._show_exec_error)
+        self._run_async(lambda: self.executor.run_smart(request), lambda result: self._handle_execution_result(self.smart_result, result), self._show_exec_error)
 
     def _run_rename(self) -> None:
         request = RenameRunRequest(input_dir=self.rename_dir.text(), mode=self.rename_mode.currentText(), template=self.rename_template.text(), fresh_name=self.rename_fresh.text(), find_text=self.rename_find.text(), replace_text=self.rename_replace.text(), prefix=self.rename_prefix.text(), suffix=self.rename_suffix.text(), start_index=self.rename_start.value(), step=self.rename_step.value(), padding_width=self.rename_padding.value(), recurse=self.rename_recurse.isChecked(), extensions=self.rename_extensions.text(), case_sensitive=self.rename_case.isChecked(), keep_extension=self.rename_keep_ext.isChecked())
@@ -955,7 +979,7 @@ class NeonPilotQtWindow(QMainWindow):
     def _run_ps_batch(self) -> None:
         request = PhotoshopBatchRequest(template_path=self.ps_template.text(), droplet_path=self.ps_droplet.text(), input_dir=self.ps_input.text(), output_dir=self.ps_output.text(), photoshop_path=self.ps_exe.text(), template_wait_sec=self.ps_wait.value(), timeout_sec=self.ps_timeout.value(), collect_wait_sec=self.ps_collect_wait.value(), close_photoshop_when_done=self.ps_close.isChecked())
         self._set_busy("正在执行 Photoshop 套图")
-        self._run_async(lambda: self.executor.run_photoshop_batch(request), lambda result: self._handle_execution_result(self.ps_log, result), self._show_exec_error)
+        self._run_async(lambda: self.executor.run_photoshop_batch(request), lambda result: self._handle_execution_result(self.ps_result, result), self._show_exec_error)
 
     def _run_resize_batch(self) -> None:
         request = ResizeRunRequest(
@@ -971,7 +995,7 @@ class NeonPilotQtWindow(QMainWindow):
         self._set_busy("正在批量调尺寸")
         self._run_async(
             lambda: self.executor.run_resize_batch(request),
-            lambda result: self._handle_execution_result(self.resize_log, result),
+            lambda result: self._handle_execution_result(self.resize_result, result),
             self._show_exec_error,
         )
 
@@ -987,7 +1011,7 @@ class NeonPilotQtWindow(QMainWindow):
         self._set_busy("正在执行转高清")
         self._run_async(
             lambda: self.executor.run_upscale_batch(request),
-            lambda result: self._handle_execution_result(self.upscale_log, result),
+            lambda result: self._handle_execution_result(self.upscale_result, result),
             self._show_exec_error,
         )
 

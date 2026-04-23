@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
+import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,9 +39,22 @@ def external_upscale_available() -> bool:
 def _upscale_with_realesrgan(input_path: Path, output_path: Path, *, scale: int, mode: str) -> UpscaleSummary:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tile_size = '200' if mode == 'quality' else '128'
+    source_dpi: tuple[float, float] | None = None
+    with Image.open(input_path) as source_image:
+        source_dpi = source_image.info.get('dpi')
+    source_path = input_path
+    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    if input_path.suffix.lower() in {'.tif', '.tiff'}:
+        temp_dir = tempfile.TemporaryDirectory(prefix='neonpilot-upscale-')
+        source_path = Path(temp_dir.name) / f'{input_path.stem}.png'
+        with Image.open(input_path) as image:
+            image = ImageOps.exif_transpose(image)
+            if image.mode not in {'RGB', 'RGBA'}:
+                image = image.convert('RGBA' if 'A' in image.getbands() else 'RGB')
+            image.save(source_path)
     command = [
         str(UPSCALE_BINARY),
-        '-i', str(input_path),
+        '-i', str(source_path),
         '-o', str(output_path),
         '-s', str(scale),
         '-f', output_path.suffix.lower().lstrip('.') or 'png',
@@ -53,9 +68,24 @@ def _upscale_with_realesrgan(input_path: Path, output_path: Path, *, scale: int,
         encoding='utf-8',
         errors='replace',
         check=False,
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0) if os.name == 'nt' else 0,
     )
+    if temp_dir is not None:
+        temp_dir.cleanup()
     if completed.returncode != 0:
         raise RuntimeError((completed.stderr or completed.stdout or 'Real-ESRGAN 执行失败。').strip())
+    if source_dpi and output_path.exists():
+        with Image.open(output_path) as enhanced:
+            save_kwargs = {'dpi': source_dpi}
+            if output_path.suffix.lower() in {'.jpg', '.jpeg'}:
+                if enhanced.mode == 'RGBA':
+                    flattened = Image.new('RGB', enhanced.size, '#101826')
+                    flattened.paste(enhanced, mask=enhanced.getchannel('A'))
+                    enhanced = flattened
+                else:
+                    enhanced = enhanced.convert('RGB')
+                save_kwargs.update({'quality': 96, 'subsampling': 0})
+            enhanced.save(output_path, **save_kwargs)
     return UpscaleSummary(
         input_path=str(input_path),
         output_path=str(output_path),
@@ -68,6 +98,7 @@ def _upscale_with_realesrgan(input_path: Path, output_path: Path, *, scale: int,
 def _upscale_with_internal_fallback(input_path: Path, output_path: Path, *, scale: int = 2, mode: str = 'quality') -> UpscaleSummary:
     image = Image.open(input_path)
     image = ImageOps.exif_transpose(image)
+    source_dpi = image.info.get('dpi')
     if image.mode not in {'RGB', 'RGBA'}:
         image = image.convert('RGBA' if 'A' in image.getbands() else 'RGB')
 
@@ -96,6 +127,8 @@ def _upscale_with_internal_fallback(input_path: Path, output_path: Path, *, scal
             resized = resized.convert('RGB')
         save_kwargs['quality'] = 96
         save_kwargs['subsampling'] = 0
+    if source_dpi:
+        save_kwargs['dpi'] = source_dpi
     resized.save(output_path, **save_kwargs)
     return UpscaleSummary(
         input_path=str(input_path),
@@ -108,5 +141,8 @@ def _upscale_with_internal_fallback(input_path: Path, output_path: Path, *, scal
 
 def upscale_image(input_path: Path, output_path: Path, *, scale: int = 2, mode: str = 'quality') -> UpscaleSummary:
     if external_upscale_available():
-        return _upscale_with_realesrgan(input_path, output_path, scale=scale, mode=mode)
+        try:
+            return _upscale_with_realesrgan(input_path, output_path, scale=scale, mode=mode)
+        except Exception:
+            return _upscale_with_internal_fallback(input_path, output_path, scale=scale, mode=mode)
     return _upscale_with_internal_fallback(input_path, output_path, scale=scale, mode=mode)
