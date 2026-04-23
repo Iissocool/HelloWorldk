@@ -126,6 +126,25 @@ class CardFrame(QFrame):
         return self.layout_
 
 
+class StatusTile(QFrame):
+    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("StatusTile")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(6)
+        title_label = QLabel(title)
+        title_label.setObjectName("MutedLabel")
+        layout.addWidget(title_label)
+        self.value_label = QLabel("--")
+        self.value_label.setObjectName("StatusValue")
+        self.value_label.setWordWrap(True)
+        layout.addWidget(self.value_label)
+
+    def set_value(self, text: str) -> None:
+        self.value_label.setText(text)
+
+
 class NeonPilotQtWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -222,9 +241,11 @@ class NeonPilotQtWindow(QMainWindow):
             """
             QMainWindow, QWidget { background: transparent; color: #eaf4ff; font-family: 'Segoe UI'; font-size: 14px; }
             QFrame#CardFrame { background: rgba(10, 22, 40, 0.78); border: 1px solid rgba(120, 190, 255, 0.28); border-radius: 20px; }
+            QFrame#StatusTile { background: rgba(7, 18, 34, 0.86); border: 1px solid rgba(112, 195, 255, 0.24); border-radius: 14px; }
             QLabel#BrandTitle { font-size: 34px; font-weight: 700; color: #f5fbff; }
             QLabel#PageTitle { font-size: 26px; font-weight: 700; color: #f7fbff; }
             QLabel#CardTitle { font-size: 20px; font-weight: 600; color: #a9e3ff; }
+            QLabel#StatusValue { font-size: 18px; font-weight: 700; color: #f6fbff; }
             QLabel#MutedLabel { color: rgba(230, 242, 255, 0.72); font-size: 13px; }
             QLabel#StatusPill { background: rgba(88, 170, 255, 0.18); border: 1px solid rgba(130, 206, 255, 0.44); border-radius: 18px; padding: 6px 14px; color: #dff7ff; font-weight: 600; }
             QListWidget#NavList { background: transparent; border: none; outline: none; }
@@ -593,27 +614,19 @@ class NeonPilotQtWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         status_card = CardFrame("Agent 状态")
-        status_card.setMaximumHeight(150)
-        chip_row = QHBoxLayout()
-        chip_row.setSpacing(12)
-        self.agent_docker = QLineEdit(); self.agent_docker.setReadOnly(True)
-        self.agent_hermes = QLineEdit(); self.agent_hermes.setReadOnly(True)
-        self.agent_chat = QLineEdit(); self.agent_chat.setReadOnly(True)
-        self.agent_interactive = QLineEdit(); self.agent_interactive.setReadOnly(True)
-        for label_text, widget in [
-            ("Docker", self.agent_docker),
-            ("Gateway", self.agent_hermes),
-            ("对话", self.agent_chat),
-            ("交互", self.agent_interactive),
-        ]:
-            cell = QVBoxLayout()
-            label = QLabel(label_text)
-            label.setObjectName("MutedLabel")
-            cell.addWidget(label)
-            cell.addWidget(widget)
-            chip_row.addLayout(cell, 1)
-        status_card.body().addLayout(chip_row)
-        self.agent_status_log = QPlainTextEdit(); self.agent_status_log.setReadOnly(True); self.agent_status_log.setMaximumHeight(52)
+        status_grid = QGridLayout()
+        status_grid.setHorizontalSpacing(12)
+        status_grid.setVerticalSpacing(12)
+        self.agent_docker = StatusTile("Docker")
+        self.agent_hermes = StatusTile("Hermes Gateway")
+        self.agent_chat = StatusTile("对话能力")
+        self.agent_interactive = StatusTile("交互式 CLI")
+        for index, widget in enumerate(
+            [self.agent_docker, self.agent_hermes, self.agent_chat, self.agent_interactive]
+        ):
+            status_grid.addWidget(widget, 0, index)
+        status_card.body().addLayout(status_grid)
+        self.agent_status_log = QPlainTextEdit(); self.agent_status_log.setReadOnly(True); self.agent_status_log.setMaximumHeight(64)
         status_card.body().addWidget(self.agent_status_log)
         status_buttons = QHBoxLayout()
         for text, cmd in [("刷新状态", "status"), ("一键准备 Agent", "agent-ready"), ("查看日志", "logs")]:
@@ -724,19 +737,19 @@ class NeonPilotQtWindow(QMainWindow):
     def refresh_agent_status(self) -> None:
         ok, payload = execute_command(["hermes-status"])
         if not ok:
-            self.agent_docker.setText("未知")
-            self.agent_hermes.setText("未知")
-            self.agent_chat.setText("不可用")
-            self.agent_interactive.setText("需原生终端")
+            self.agent_docker.set_value("未知")
+            self.agent_hermes.set_value("未知")
+            self.agent_chat.set_value("不可用")
+            self.agent_interactive.set_value("需原生终端")
             self.agent_status_log.setPlainText(str(payload))
             return
         docker_ok = payload.get("docker_daemon_running")
         service_ok = payload.get("service_running")
         chat_ok = payload.get("inference_ready")
-        self.agent_docker.setText("已运行" if docker_ok else "未运行")
-        self.agent_hermes.setText("已运行" if service_ok else "未运行")
-        self.agent_chat.setText("可对话" if chat_ok else "需先配置 API")
-        self.agent_interactive.setText("使用原生终端" if service_ok else "服务未就绪")
+        self.agent_docker.set_value("已运行" if docker_ok else "未运行")
+        self.agent_hermes.set_value("已运行" if service_ok else "未运行")
+        self.agent_chat.set_value("可对话" if chat_ok else "需先配置 API")
+        self.agent_interactive.set_value("原生终端" if service_ok else "服务未就绪")
         self.agent_status_log.setPlainText(
             " · ".join(
                 [
