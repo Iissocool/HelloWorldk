@@ -195,8 +195,8 @@ class PhotoshopResizeBatchRequest(BaseModel):
     input_dir: str
     output_dir: str
     photoshop_path: str = ""
-    action_set: str = "高透三折叠套图"
-    action_name: str = "透明图"
+    action_set: str = "默认动作"
+    action_name: str = "高透三折叠套图-透明图"
     timeout_sec: int = 3600
 
 

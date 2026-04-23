@@ -186,9 +186,9 @@ def build_parser() -> argparse.ArgumentParser:
     ps_resize = sub.add_parser("ps-resize", help="Run Photoshop File > Automate > Batch action")
     ps_resize.add_argument("--input-dir", required=True)
     ps_resize.add_argument("--output-dir", required=True)
-    ps_resize.add_argument("--photoshop", default="")
-    ps_resize.add_argument("--action-set", default="高透三折叠套图")
-    ps_resize.add_argument("--action-name", default="透明图")
+    ps_resize.add_argument("--photoshop", default=r"C:\Program Files\Adobe\Adobe Photoshop (Beta)")
+    ps_resize.add_argument("--action-set", default="默认动作")
+    ps_resize.add_argument("--action-name", default="高透三折叠套图-透明图")
     ps_resize.add_argument("--timeout", type=int, default=3600)
     return parser
 

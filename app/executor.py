@@ -40,6 +40,7 @@ from .photoshop_bridge import (
     detect_photoshop_executable,
     image_count_in_directory,
     open_template_in_photoshop,
+    resolve_photoshop_executable,
     run_photoshop_action_batch,
     run_droplet_on_folder,
     wait_for_template_ready,
@@ -677,7 +678,7 @@ class LocalExecutor:
         if not images:
             raise ExecutionError("当前批处理输入目录里没有可处理的图片。")
 
-        photoshop_path = Path(request.photoshop_path) if request.photoshop_path.strip() else detect_photoshop_executable()
+        photoshop_path = resolve_photoshop_executable(request.photoshop_path) if request.photoshop_path.strip() else detect_photoshop_executable()
         try:
             completed, command = run_photoshop_action_batch(
                 input_dir,
@@ -764,7 +765,7 @@ class LocalExecutor:
             raise ExecutionError("当前素材目录里没有可处理的图片。")
         output_dir = Path(request.output_dir) if request.output_dir.strip() else None
 
-        photoshop_path = Path(request.photoshop_path) if request.photoshop_path.strip() else detect_photoshop_executable()
+        photoshop_path = resolve_photoshop_executable(request.photoshop_path) if request.photoshop_path.strip() else detect_photoshop_executable()
         open_command, open_source = open_template_in_photoshop(template_path, photoshop_path)
         wait_for_template_ready(request.template_wait_sec)
 

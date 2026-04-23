@@ -211,6 +211,7 @@ class NeonPilotQtWindow(QMainWindow):
         self._add_page("批量命名", self._build_rename_page())
         self._add_page("AI 生图", self._build_ai_page())
         self._add_page("高清增强", self._build_upscale_page())
+        self._add_page("PS 调尺寸", self._build_ps_resize_page())
         self._add_page("PS 套图", self._build_ps_page())
         self._add_page("资源中心", self._build_resources_page())
         self._add_page("Agent 终端", self._build_agent_page())
@@ -551,41 +552,56 @@ class NeonPilotQtWindow(QMainWindow):
         layout.addRow(self.upscale_log)
         return self._wrap_scroll(page)
 
+    def _build_ps_resize_page(self) -> QWidget:
+        page = QWidget(); layout = QFormLayout(page)
+        detected_ps = detect_photoshop_executable()
+        self.ps_resize_exe, row = self._path_row(
+            "选择 Photoshop 程序或目录",
+            default=str(detected_ps.parent if detected_ps else Path(r"C:\Program Files\Adobe\Adobe Photoshop (Beta)")),
+            filter_text="Executable (*.exe);;All Files (*)",
+        )
+        layout.addRow("Photoshop", row)
+        self.ps_resize_input, row = self._path_row("选择需要调尺寸的目录", folder=True)
+        layout.addRow("输入目录", row)
+        self.ps_resize_output, row = self._path_row("选择调尺寸输出目录", folder=True)
+        layout.addRow("输出目录", row)
+        self.ps_resize_action_set = QLineEdit("默认动作")
+        self.ps_resize_action_name = QLineEdit("高透三折叠套图-透明图")
+        self.ps_resize_timeout = QSpinBox(); self.ps_resize_timeout.setRange(0, 7200); self.ps_resize_timeout.setValue(3600)
+        layout.addRow("动作组", self.ps_resize_action_set)
+        layout.addRow("动作", self.ps_resize_action_name)
+        layout.addRow("超时秒数", self.ps_resize_timeout)
+        run_btn = QPushButton("开始 PS 批处理调尺寸")
+        run_btn.clicked.connect(self._run_ps_resize_batch)
+        layout.addRow(run_btn)
+        self.ps_resize_log = QPlainTextEdit(); self.ps_resize_log.setReadOnly(True); self.ps_resize_log.setMinimumHeight(260)
+        layout.addRow(self.ps_resize_log)
+        return self._wrap_scroll(page)
+
     def _build_ps_page(self) -> QWidget:
         page = QWidget(); layout = QFormLayout(page)
-        self.ps_resize_action_set = QLineEdit("高透三折叠套图")
-        self.ps_resize_action_name = QLineEdit("透明图")
         self.ps_template, row = self._path_row("选择模板 PSD", default=r"C:\Users\F1736\Desktop\模板\昔音浴帘.psd", filter_text="Photoshop PSD (*.psd);;All Files (*)")
         layout.addRow("模板 PSD", row)
         self.ps_droplet, row = self._path_row("选择 Droplet 程序", default=r"C:\Users\F1736\Desktop\自动套图 图标.exe", filter_text="Executable (*.exe);;All Files (*)")
         layout.addRow("Droplet 程序", row)
         detected_ps = detect_photoshop_executable()
-        self.ps_exe, row = self._path_row("选择 Photoshop 程序", default=str(detected_ps) if detected_ps else "", filter_text="Executable (*.exe);;All Files (*)")
+        self.ps_exe, row = self._path_row("选择 Photoshop 程序", default=str(detected_ps) if detected_ps else r"C:\Program Files\Adobe\Adobe Photoshop (Beta)\Photoshop.exe", filter_text="Executable (*.exe);;All Files (*)")
         layout.addRow("Photoshop", row)
         self.ps_input, row = self._path_row("选择素材目录", folder=True)
         layout.addRow("素材目录", row)
-        self.ps_resize_output, row = self._path_row("选择调尺寸输出目录", folder=True)
-        layout.addRow("调尺寸输出目录", row)
         self.ps_output, row = self._path_row("选择结果收集目录", folder=True)
         layout.addRow("结果收集目录", row)
         self.ps_wait = QSpinBox(); self.ps_wait.setRange(0, 120); self.ps_wait.setValue(8)
         self.ps_timeout = QSpinBox(); self.ps_timeout.setRange(0, 7200); self.ps_timeout.setValue(1800)
         self.ps_collect_wait = QSpinBox(); self.ps_collect_wait.setRange(0, 600); self.ps_collect_wait.setValue(15)
         self.ps_close = QCheckBox("执行完成后自动关闭 Photoshop")
-        layout.addRow("批处理动作组", self.ps_resize_action_set)
-        layout.addRow("批处理动作名", self.ps_resize_action_name)
         layout.addRow("模板等待秒数", self.ps_wait)
         layout.addRow("Droplet 超时秒数", self.ps_timeout)
         layout.addRow("结果收集等待秒数", self.ps_collect_wait)
         layout.addRow(self.ps_close)
-        button_row = QHBoxLayout()
-        resize_btn = QPushButton("先调尺寸")
-        resize_btn.clicked.connect(self._run_ps_resize_batch)
         batch_btn = QPushButton("开始 Photoshop 套图")
         batch_btn.clicked.connect(self._run_ps_batch)
-        button_row.addWidget(resize_btn)
-        button_row.addWidget(batch_btn)
-        layout.addRow(button_row)
+        layout.addRow(batch_btn)
         self.ps_log = QPlainTextEdit(); self.ps_log.setReadOnly(True); self.ps_log.setMinimumHeight(260)
         layout.addRow(self.ps_log)
         return self._wrap_scroll(page)
@@ -916,16 +932,17 @@ class NeonPilotQtWindow(QMainWindow):
 
     def _run_ps_resize_batch(self) -> None:
         request = PhotoshopResizeBatchRequest(
-            input_dir=self.ps_input.text(),
+            input_dir=self.ps_resize_input.text(),
             output_dir=self.ps_resize_output.text(),
-            photoshop_path=self.ps_exe.text(),
-            action_set=self.ps_resize_action_set.text().strip() or "高透三折叠套图",
-            action_name=self.ps_resize_action_name.text().strip() or "透明图",
+            photoshop_path=self.ps_resize_exe.text(),
+            action_set=self.ps_resize_action_set.text().strip() or "默认动作",
+            action_name=self.ps_resize_action_name.text().strip() or "高透三折叠套图-透明图",
+            timeout_sec=self.ps_resize_timeout.value(),
         )
         self._set_busy("正在执行 Photoshop 批处理调尺寸")
         self._run_async(
             lambda: self.executor.run_photoshop_resize_batch(request),
-            lambda result: self._handle_execution_result(self.ps_log, result),
+            lambda result: self._handle_execution_result(self.ps_resize_log, result),
             self._show_exec_error,
         )
 
@@ -1020,6 +1037,7 @@ class NeonPilotQtWindow(QMainWindow):
                         "  workflow model show",
                         "  workflow model set --model <id> --provider <name> --base-url <url> --api-key <key>",
                         "  workflow run upscale-ps --input-dir <dir> --upscale-dir <dir> --resize-dir <dir> --ps-output-dir <dir> --template <psd> --droplet <exe>",
+                        "    默认批处理动作：默认动作 / 高透三折叠套图-透明图",
                         "  workflow run background-refresh --input-dir <dir> --output-dir <dir> --subject <主体> --background <背景意愿> --style <预设>",
                         "  背景风格预设: custom / clean-ecommerce / cream-home / minimal-bathroom / outdoor-sunlit / luxury-dark",
                         "  workflow run <bridge command>",
@@ -1094,8 +1112,8 @@ class NeonPilotQtWindow(QMainWindow):
                 "--droplet": "",
                 "--photoshop": "",
                 "--scale": "2",
-                "--action-set": "高透三折叠套图",
-                "--action-name": "透明图",
+                "--action-set": "默认动作",
+                "--action-name": "高透三折叠套图-透明图",
             }
             flags = {"--recurse": False, "--overwrite": False, "--close-photoshop": False}
             key = None

@@ -10,7 +10,9 @@ NeonPilot 的 Agent 是一个工作流调度终端，用来快速执行固定流
    `workflow model set --model <模型> --provider <提供方> --base-url <地址> --api-key <密钥>`
 4. 运行转高清 -> 调尺寸 -> PS 套图：
    `workflow run upscale-ps --input-dir "W:\images\in" --upscale-dir "W:\images\upscaled" --resize-dir "W:\images\resized" --ps-output-dir "W:\images\final" --template "C:\Users\F1736\Desktop\模板\昔音浴帘.psd" --droplet "C:\Users\F1736\Desktop\自动套图 图标.exe" --close-photoshop`
-5. 运行保主体换背景：
+5. 单独运行 Photoshop 批处理调尺寸：
+   `ps-resize --input-dir "W:\images\in" --output-dir "W:\images\resized" --photoshop "C:\Program Files\Adobe\Adobe Photoshop (Beta)" --action-set "默认动作" --action-name "高透三折叠套图-透明图"`
+6. 运行保主体换背景：
    `workflow run background-refresh --input-dir "W:\images\source" --output-dir "W:\images\out" --subject "浴帘" --background "北欧奶油风浴室电商场景，柔和自然光，干净高级" --style clean-ecommerce`
 
 ## 工具栏怎么用
@@ -58,3 +60,13 @@ NeonPilot 的 Agent 是一个工作流调度终端，用来快速执行固定流
 
 ### 3. 调尺寸这一步是做什么的
 这一步调用 Photoshop 的“文件 -> 自动 -> 批处理”，按你设置的动作组和动作名批量修改图片尺寸，然后再把调好尺寸的图交给模板套图。
+
+当前默认值：
+- 动作组：`默认动作`
+- 动作名：`高透三折叠套图-透明图`
+
+Photoshop 路径可以直接填写目录：
+
+```text
+C:\Program Files\Adobe\Adobe Photoshop (Beta)
+```

@@ -41,12 +41,24 @@ def detect_photoshop_executable() -> Path | None:
     return fallback if fallback.exists() else None
 
 
+def resolve_photoshop_executable(path_text: str | Path | None = None) -> Path | None:
+    if path_text:
+        candidate = Path(path_text)
+        if candidate.is_dir():
+            exe = candidate / "Photoshop.exe"
+            if exe.exists():
+                return exe
+        if candidate.exists() and candidate.name.lower() == "photoshop.exe":
+            return candidate
+    return detect_photoshop_executable()
+
+
 def image_count_in_directory(input_dir: Path) -> int:
     return sum(1 for path in input_dir.iterdir() if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES)
 
 
 def open_template_in_photoshop(template_path: Path, photoshop_executable: Path | None = None) -> tuple[list[str], str]:
-    photoshop_path = photoshop_executable or detect_photoshop_executable()
+    photoshop_path = resolve_photoshop_executable(photoshop_executable) if photoshop_executable else detect_photoshop_executable()
     if photoshop_path and photoshop_path.exists():
         command = [str(photoshop_path), str(template_path)]
         subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -129,7 +141,7 @@ def run_photoshop_action_batch(
     photoshop_executable: Path | None = None,
     timeout_sec: int = 3600,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    photoshop_path = photoshop_executable or detect_photoshop_executable()
+    photoshop_path = resolve_photoshop_executable(photoshop_executable) if photoshop_executable else detect_photoshop_executable()
     if not photoshop_path or not photoshop_path.exists():
         raise FileNotFoundError("未找到 Photoshop 可执行文件。")
 
@@ -144,7 +156,12 @@ if (!outputFolder.exists) {{
     outputFolder.create();
 }}
 app.displayDialogs = DialogModes.NO;
-app.batch(inputFolder, '{action_name}', '{action_set}', undefined, outputFolder);
+var opts = new BatchOptions();
+opts.destination = BatchDestinationType.FOLDER;
+opts.destinationFolder = outputFolder;
+opts.overrideOpen = true;
+opts.overrideSave = true;
+app.batch(inputFolder, '{action_name}', '{action_set}', opts);
 app.quit();
 """
     with tempfile.NamedTemporaryFile("w", suffix=".jsx", delete=False, encoding="utf-8") as handle:
