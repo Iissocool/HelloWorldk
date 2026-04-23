@@ -1,5 +1,5 @@
 #define MyAppName "NeonPilot"
-#define MyAppVersion "0.6.0"
+#define MyAppVersion "0.8.0"
 #define MyAppPublisher "NeonPilot Project"
 #define MyAppExeName "NeonPilot.exe"
 #define MyBuildDir "..\dist\NeonPilot"

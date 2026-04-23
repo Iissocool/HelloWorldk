@@ -45,21 +45,19 @@ from .config import APP_NAME, APP_TAGLINE, APP_VERSION, BACKGROUND_PNG, ICON_ICO
 from .executor import ExecutionError, LocalExecutor, ModelMissingError, RuntimeMissingError
 from .hardware import detect_hardware_profile
 from .hermes_adapter import (
-    launch_interactive_hermes_terminal,
-    run_container_shell_command,
-    run_docker_cli_command,
     run_hermes_query,
+    test_openai_compatible_provider,
 )
 from .history import HistoryStore
 from .models import (
     AIImageRunRequest,
     AIImageTestRequest,
-    AppSettings,
     BatchRunRequest,
     PhotoshopBatchRequest,
     RenameRunRequest,
     SingleRunRequest,
     SmartRunRequest,
+    UpscaleRunRequest,
 )
 from .photoshop_bridge import detect_photoshop_executable
 from .planner import build_runtime_plan
@@ -124,25 +122,6 @@ class CardFrame(QFrame):
 
     def body(self) -> QVBoxLayout:
         return self.layout_
-
-
-class StatusTile(QFrame):
-    def __init__(self, title: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("StatusTile")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(6)
-        title_label = QLabel(title)
-        title_label.setObjectName("MutedLabel")
-        layout.addWidget(title_label)
-        self.value_label = QLabel("--")
-        self.value_label.setObjectName("StatusValue")
-        self.value_label.setWordWrap(True)
-        layout.addWidget(self.value_label)
-
-    def set_value(self, text: str) -> None:
-        self.value_label.setText(text)
 
 
 class NeonPilotQtWindow(QMainWindow):
@@ -230,6 +209,7 @@ class NeonPilotQtWindow(QMainWindow):
         self._add_page("抠图工作台", self._build_matting_page())
         self._add_page("批量命名", self._build_rename_page())
         self._add_page("AI 生图", self._build_ai_page())
+        self._add_page("高清增强", self._build_upscale_page())
         self._add_page("PS 套图", self._build_ps_page())
         self._add_page("资源中心", self._build_resources_page())
         self._add_page("Agent 终端", self._build_agent_page())
@@ -241,11 +221,9 @@ class NeonPilotQtWindow(QMainWindow):
             """
             QMainWindow, QWidget { background: transparent; color: #eaf4ff; font-family: 'Segoe UI'; font-size: 14px; }
             QFrame#CardFrame { background: rgba(10, 22, 40, 0.78); border: 1px solid rgba(120, 190, 255, 0.28); border-radius: 20px; }
-            QFrame#StatusTile { background: rgba(7, 18, 34, 0.86); border: 1px solid rgba(112, 195, 255, 0.24); border-radius: 14px; }
             QLabel#BrandTitle { font-size: 34px; font-weight: 700; color: #f5fbff; }
             QLabel#PageTitle { font-size: 26px; font-weight: 700; color: #f7fbff; }
             QLabel#CardTitle { font-size: 20px; font-weight: 600; color: #a9e3ff; }
-            QLabel#StatusValue { font-size: 18px; font-weight: 700; color: #f6fbff; }
             QLabel#MutedLabel { color: rgba(230, 242, 255, 0.72); font-size: 13px; }
             QLabel#StatusPill { background: rgba(88, 170, 255, 0.18); border: 1px solid rgba(130, 206, 255, 0.44); border-radius: 18px; padding: 6px 14px; color: #dff7ff; font-weight: 600; }
             QListWidget#NavList { background: transparent; border: none; outline: none; }
@@ -550,6 +528,28 @@ class NeonPilotQtWindow(QMainWindow):
         container = QWidget(); layout = QVBoxLayout(container); layout.setContentsMargins(0,0,0,0); layout.addWidget(splitter)
         return container
 
+    def _build_upscale_page(self) -> QWidget:
+        page = QWidget()
+        layout = QFormLayout(page)
+        self.upscale_input, row = self._path_row("选择需要转高清的目录", folder=True)
+        layout.addRow("输入目录", row)
+        self.upscale_output, row = self._path_row("选择高清输出目录", folder=True)
+        layout.addRow("输出目录", row)
+        self.upscale_scale = QComboBox(); self.upscale_scale.addItems(["2", "4"])
+        self.upscale_mode = QComboBox(); self.upscale_mode.addItems(["quality", "balanced", "speed"])
+        self.upscale_recurse = QCheckBox("递归处理子目录")
+        self.upscale_overwrite = QCheckBox("覆盖已有输出")
+        layout.addRow("放大倍数", self.upscale_scale)
+        layout.addRow("增强模式", self.upscale_mode)
+        layout.addRow(self.upscale_recurse)
+        layout.addRow(self.upscale_overwrite)
+        run_btn = QPushButton("开始转高清")
+        run_btn.clicked.connect(self._run_upscale_batch)
+        layout.addRow(run_btn)
+        self.upscale_log = QPlainTextEdit(); self.upscale_log.setReadOnly(True); self.upscale_log.setMinimumHeight(280)
+        layout.addRow(self.upscale_log)
+        return self._wrap_scroll(page)
+
     def _build_ps_page(self) -> QWidget:
         page = QWidget(); layout = QFormLayout(page)
         self.ps_template, row = self._path_row("选择模板 PSD", default=r"C:\Users\F1736\Desktop\模板\昔音浴帘.psd", filter_text="Photoshop PSD (*.psd);;All Files (*)")
@@ -613,48 +613,16 @@ class NeonPilotQtWindow(QMainWindow):
     def _build_agent_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        status_card = CardFrame("Agent 状态")
-        status_grid = QGridLayout()
-        status_grid.setHorizontalSpacing(12)
-        status_grid.setVerticalSpacing(12)
-        self.agent_docker = StatusTile("Docker")
-        self.agent_hermes = StatusTile("Hermes Gateway")
-        self.agent_chat = StatusTile("对话能力")
-        self.agent_interactive = StatusTile("交互式 CLI")
-        for index, widget in enumerate(
-            [self.agent_docker, self.agent_hermes, self.agent_chat, self.agent_interactive]
-        ):
-            status_grid.addWidget(widget, 0, index)
-        status_card.body().addLayout(status_grid)
-        self.agent_status_log = QPlainTextEdit(); self.agent_status_log.setReadOnly(True); self.agent_status_log.setMaximumHeight(64)
-        status_card.body().addWidget(self.agent_status_log)
-        status_buttons = QHBoxLayout()
-        for text, cmd in [("刷新状态", "status"), ("一键准备 Agent", "agent-ready"), ("查看日志", "logs")]:
-            btn = QPushButton(text)
-            btn.clicked.connect(lambda _=False, value=cmd: self._execute_agent_terminal_command(value))
-            status_buttons.addWidget(btn)
-        native_btn = QPushButton("打开原生 Hermes")
-        native_btn.clicked.connect(self._open_native_hermes)
-        status_buttons.addWidget(native_btn)
-        status_card.body().addLayout(status_buttons)
-        layout.addWidget(status_card)
-
-        terminal_card = CardFrame("Agent 调度终端")
-        self.agent_mode = QComboBox()
-        self.agent_mode.addItems(["workflow", "hermes", "docker", "container"])
-        self.agent_mode.currentTextChanged.connect(self._update_agent_mode_help)
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("终端模式"))
-        mode_row.addWidget(self.agent_mode, 1)
-        terminal_card.body().addLayout(mode_row)
-        self.agent_help = QLabel("")
-        self.agent_help.setWordWrap(True)
-        self.agent_help.setObjectName("MutedLabel")
-        terminal_card.body().addWidget(self.agent_help)
+        terminal_card = CardFrame("Agent 工作流终端")
+        terminal_hint = QLabel("这里直接输入工作流命令或自然语言。固定的 Docker / Hermes / 容器模式已移除，主视图只保留可执行工作流。")
+        terminal_hint.setWordWrap(True)
+        terminal_hint.setObjectName("MutedLabel")
+        terminal_card.body().addWidget(terminal_hint)
         self.agent_terminal = QPlainTextEdit(); self.agent_terminal.setReadOnly(True)
-        self.agent_terminal.setMinimumHeight(560)
+        self.agent_terminal.setMinimumHeight(620)
         terminal_card.body().addWidget(self.agent_terminal)
-        self.agent_input = QPlainTextEdit(); self.agent_input.setMaximumHeight(140)
+        self.agent_input = QPlainTextEdit(); self.agent_input.setMaximumHeight(120)
+        self.agent_input.setPlaceholderText("例如：workflow help  或  workflow run upscale-ps --input-dir \"W:\\images\" --upscale-dir \"W:\\upscaled\" --template \"C:\\...psd\" --droplet \"C:\\...exe\"")
         terminal_card.body().addWidget(self.agent_input)
         terminal_buttons = QHBoxLayout()
         send_btn = QPushButton("发送命令")
@@ -664,7 +632,58 @@ class NeonPilotQtWindow(QMainWindow):
         terminal_buttons.addWidget(send_btn); terminal_buttons.addWidget(clear_btn)
         terminal_card.body().addLayout(terminal_buttons)
         layout.addWidget(terminal_card, 1)
-        self._update_agent_mode_help(self.agent_mode.currentText())
+
+        footer_card = CardFrame("Agent 快捷组件")
+        status_row = QHBoxLayout()
+        status_row.setSpacing(10)
+        self.agent_docker_badge = QLabel("Docker: --"); self.agent_docker_badge.setObjectName("StatusPill")
+        self.agent_hermes_badge = QLabel("Gateway: --"); self.agent_hermes_badge.setObjectName("StatusPill")
+        self.agent_chat_badge = QLabel("对话: --"); self.agent_chat_badge.setObjectName("StatusPill")
+        for badge in [self.agent_docker_badge, self.agent_hermes_badge, self.agent_chat_badge]:
+            badge.setMinimumHeight(34)
+            badge.setAlignment(Qt.AlignCenter)
+            status_row.addWidget(badge)
+        footer_card.body().addLayout(status_row)
+
+        self.agent_status_log = QLabel("--")
+        self.agent_status_log.setObjectName("MutedLabel")
+        self.agent_status_log.setWordWrap(True)
+        footer_card.body().addWidget(self.agent_status_log)
+
+        api_grid = QGridLayout()
+        api_grid.setHorizontalSpacing(10)
+        api_grid.setVerticalSpacing(10)
+        self.agent_provider = QComboBox()
+        self.agent_provider.addItems(["auto", "openai", "openrouter", "gemini", "anthropic", "xai", "ollama-cloud", "zai", "kimi-coding", "minimax", "nvidia"])
+        self.agent_model = QLineEdit()
+        self.agent_base_url = QLineEdit()
+        self.agent_base_url.setPlaceholderText("可选：OpenAI 兼容地址")
+        self.agent_api_key = QLineEdit()
+        self.agent_api_key.setEchoMode(QLineEdit.Password)
+        self.agent_api_key.setPlaceholderText("仅在需要时填写新的 API Key")
+        api_grid.addWidget(QLabel("提供方"), 0, 0)
+        api_grid.addWidget(self.agent_provider, 0, 1)
+        api_grid.addWidget(QLabel("模型"), 0, 2)
+        api_grid.addWidget(self.agent_model, 0, 3)
+        api_grid.addWidget(QLabel("Base URL"), 1, 0)
+        api_grid.addWidget(self.agent_base_url, 1, 1, 1, 2)
+        api_grid.addWidget(QLabel("API Key"), 1, 3)
+        api_grid.addWidget(self.agent_api_key, 1, 4)
+        footer_card.body().addLayout(api_grid)
+
+        footer_buttons = QHBoxLayout()
+        for text, handler in [
+            ("刷新状态", self.refresh_agent_status),
+            ("一键准备 Agent", lambda: self._execute_agent_terminal_command("agent-ready")),
+            ("保存模型/API", self._save_agent_quick_config),
+            ("测试 API", self._test_agent_quick_config),
+            ("查看日志", lambda: self._execute_agent_terminal_command("logs")),
+        ]:
+            btn = QPushButton(text)
+            btn.clicked.connect(handler)
+            footer_buttons.addWidget(btn)
+        footer_card.body().addLayout(footer_buttons)
+        layout.addWidget(footer_card)
         return page
 
     def _build_history_page(self) -> QWidget:
@@ -737,52 +756,82 @@ class NeonPilotQtWindow(QMainWindow):
     def refresh_agent_status(self) -> None:
         ok, payload = execute_command(["hermes-status"])
         if not ok:
-            self.agent_docker.set_value("未知")
-            self.agent_hermes.set_value("未知")
-            self.agent_chat.set_value("不可用")
-            self.agent_interactive.set_value("需原生终端")
-            self.agent_status_log.setPlainText(str(payload))
+            self.agent_docker_badge.setText("Docker: 未知")
+            self.agent_hermes_badge.setText("Gateway: 未知")
+            self.agent_chat_badge.setText("对话: 不可用")
+            self.agent_status_log.setText(str(payload))
             return
         docker_ok = payload.get("docker_daemon_running")
         service_ok = payload.get("service_running")
         chat_ok = payload.get("inference_ready")
-        self.agent_docker.set_value("已运行" if docker_ok else "未运行")
-        self.agent_hermes.set_value("已运行" if service_ok else "未运行")
-        self.agent_chat.set_value("可对话" if chat_ok else "需先配置 API")
-        self.agent_interactive.set_value("原生终端" if service_ok else "服务未就绪")
-        self.agent_status_log.setPlainText(
+        self.agent_docker_badge.setText(f"Docker: {'已运行' if docker_ok else '未运行'}")
+        self.agent_hermes_badge.setText(f"Gateway: {'已运行' if service_ok else '未运行'}")
+        self.agent_chat_badge.setText(f"对话: {'可用' if chat_ok else '需配置 API'}")
+        self.agent_status_log.setText(
             " · ".join(
                 [
-                    f"Container: {payload.get('container_name', '')}",
-                    f"Data: {payload.get('data_root', '')}",
-                    f"Version: {payload.get('version_text', '')}",
+                    f"容器：{payload.get('container_name', '')}",
+                    f"数据目录：{payload.get('data_root', '')}",
+                    f"版本：{payload.get('version_text', '')}",
                 ]
             )
         )
+        self._load_agent_quick_config()
 
-    def _update_agent_mode_help(self, mode: str) -> None:
-        help_map = {
-            "workflow": "推荐给大多数用户。可直接运行 status、agent-ready、logs、workflow model show、workflow model set ...、workflow run ...，也可以直接输入聊天内容让 Hermes 回复。",
-            "hermes": "执行单次 Hermes CLI 命令，例如 hermes --help、hermes doctor。交互式命令如 hermes model / hermes --tui 需要原生终端。",
-            "docker": "执行宿主机 Docker 命令，例如 docker ps、docker images、docker logs neonpilot-hermes。",
-            "container": "执行容器内 shell 命令，例如 ls /opt/data、cat /opt/data/.env、hermes version。",
-        }
-        placeholder_map = {
-            "workflow": "例如: status  或  workflow model show  或  你好，帮我检查当前工作流状态",
-            "hermes": "例如: hermes doctor",
-            "docker": "例如: docker ps",
-            "container": "例如: ls /opt/data",
-        }
-        self.agent_help.setText(help_map.get(mode, ""))
-        self.agent_input.setPlaceholderText(placeholder_map.get(mode, "请输入命令"))
+    def _load_agent_quick_config(self) -> None:
+        ok, payload = execute_command(["hermes-config-show"])
+        if not ok:
+            return
+        model_payload = payload.get("model", {})
+        self.agent_model.setText(str(model_payload.get("default", "")))
+        provider = str(model_payload.get("provider", "auto")) or "auto"
+        index = self.agent_provider.findText(provider)
+        self.agent_provider.setCurrentIndex(index if index >= 0 else 0)
+        self.agent_base_url.setText(str(model_payload.get("base_url", "")))
+        self.agent_api_key.setPlaceholderText(
+            f"当前环境变量：{payload.get('provider', {}).get('api_env', '') or '未绑定'}"
+        )
 
-    def _open_native_hermes(self) -> None:
-        ok, message = launch_interactive_hermes_terminal()
-        if ok:
-            self.agent_terminal.appendPlainText(f"[native]\n{message}\n")
-            self._set_ready("已打开原生 Hermes 终端")
-        else:
-            self._show_error(message)
+    def _save_agent_quick_config(self) -> None:
+        ok, payload = execute_command(
+            [
+                "hermes-config-set",
+                "--model",
+                self.agent_model.text().strip(),
+                "--provider",
+                self.agent_provider.currentText(),
+                "--base-url",
+                self.agent_base_url.text().strip(),
+                "--api-key",
+                self.agent_api_key.text().strip(),
+            ]
+        )
+        if not ok:
+            self._show_error(str(payload))
+            return
+        self.agent_terminal.appendPlainText("[workflow]\n模型/API 已保存。\n")
+        self.agent_api_key.clear()
+        self.refresh_agent_status()
+        self._set_ready("模型配置已保存")
+
+    def _test_agent_quick_config(self) -> None:
+        model = self.agent_model.text().strip()
+        api_key = self.agent_api_key.text().strip()
+        base_url = self.agent_base_url.text().strip()
+        if not model or not api_key or not base_url:
+            self._show_error("测试 API 需要填写模型、Base URL 和 API Key。")
+            return
+        self._set_busy("正在测试 API")
+        self._run_async(
+            lambda: test_openai_compatible_provider(model, api_key, base_url),
+            self._handle_agent_api_test,
+            self._show_exec_error,
+        )
+
+    def _handle_agent_api_test(self, result: tuple[bool, str]) -> None:
+        ok, message = result
+        self.agent_terminal.appendPlainText(f"[workflow]\n{message}\n")
+        self._set_ready("API 测试完成" if ok else "API 测试失败")
 
     def _handle_execution_result(self, box: QPlainTextEdit, result) -> None:
         self._set_ready(result.summary or "执行完成")
@@ -837,6 +886,22 @@ class NeonPilotQtWindow(QMainWindow):
         self._set_busy("正在执行 Photoshop 套图")
         self._run_async(lambda: self.executor.run_photoshop_batch(request), lambda result: self._handle_execution_result(self.ps_log, result), self._show_exec_error)
 
+    def _run_upscale_batch(self) -> None:
+        request = UpscaleRunRequest(
+            input_dir=self.upscale_input.text(),
+            output_dir=self.upscale_output.text(),
+            scale=int(self.upscale_scale.currentText()),
+            mode=self.upscale_mode.currentText(),
+            recurse=self.upscale_recurse.isChecked(),
+            overwrite=self.upscale_overwrite.isChecked(),
+        )
+        self._set_busy("正在执行转高清")
+        self._run_async(
+            lambda: self.executor.run_upscale_batch(request),
+            lambda result: self._handle_execution_result(self.upscale_log, result),
+            self._show_exec_error,
+        )
+
     def _run_resource_command(self, mode: str) -> None:
         if mode.startswith("runtime"):
             row = self.runtime_table.currentRow()
@@ -877,7 +942,6 @@ class NeonPilotQtWindow(QMainWindow):
 
     def _dispatch_agent_command(self, text: str) -> dict:
         lowered = text.strip().lower()
-        mode = self.agent_mode.currentText()
         if lowered == "status":
             ok, payload = execute_command(["hermes-status"])
             return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2)}
@@ -890,19 +954,13 @@ class NeonPilotQtWindow(QMainWindow):
         if lowered == "logs":
             ok, payload = execute_command(["hermes-logs", "--tail", "120"])
             return {"ok": ok, "stdout": payload.get("stdout", ""), "stderr": payload.get("stderr", "")}
-        if mode == "workflow":
-            return self._dispatch_workflow_command(text)
-        if mode == "hermes":
-            hermes_text = text if lowered.startswith("hermes") else f"hermes {text}"
-            ok, payload = execute_command(["hermes-exec", "--text", hermes_text])
-            return {"ok": ok, "stdout": payload.get("stdout", ""), "stderr": payload.get("stderr", "")}
-        if mode == "docker":
-            ok, stdout, stderr = run_docker_cli_command(text)
-            return {"ok": ok, "stdout": stdout, "stderr": stderr}
-        if mode == "container":
-            ok, stdout, stderr = run_container_shell_command(text)
-            return {"ok": ok, "stdout": stdout, "stderr": stderr}
-        return {"ok": False, "stdout": "", "stderr": "未知终端模式。"}
+        if lowered.startswith(("hermes ", "docker ", "container ", "hermes", "docker", "container")):
+            return {
+                "ok": False,
+                "stdout": "",
+                "stderr": "当前 Agent 已收口为工作流终端，不再提供 hermes / docker / container 独立模式。模型和 API 请直接用下方快捷组件，或使用 workflow model show / workflow model set。",
+            }
+        return self._dispatch_workflow_command(text)
 
     def _dispatch_workflow_command(self, text: str) -> dict:
         stripped = text.strip()
@@ -918,10 +976,10 @@ class NeonPilotQtWindow(QMainWindow):
                         "  logs",
                         "  workflow model show",
                         "  workflow model set --model <id> --provider <name> --base-url <url> --api-key <key>",
-                        "  workflow model test --model <id> --base-url <url> --api-key <key>",
+                        "  workflow run upscale-ps --input-dir <dir> --upscale-dir <dir> --template <psd> --droplet <exe>",
+                        "  workflow run background-refresh --input-dir <dir> --output-dir <dir> --subject <主体> --background <背景意愿>",
                         "  workflow run <bridge command>",
                         "直接输入自然语言时，会转成 Hermes chat -q 查询。",
-                        "交互式命令请用 打开原生 Hermes。",
                     ]
                 ),
                 "stderr": "",
@@ -959,11 +1017,141 @@ class NeonPilotQtWindow(QMainWindow):
             )
             return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2), "stderr": ""}
         if lowered.startswith("workflow model test") or lowered.startswith("model test"):
-            return {
-                "ok": False,
-                "stdout": "",
-                "stderr": "workflow model test 下一步会并入统一测试。当前请先用 AI 生图页的“测试 API”，或在 workflow mode 下直接输入自然语言验证回复。",
+            argv = shlex.split(stripped)
+            if argv[0] == "workflow":
+                argv = argv[2:]
+            else:
+                argv = argv[1:]
+            mapping = {"--model": "", "--base-url": "", "--api-key": ""}
+            key = None
+            for token in argv[1:]:
+                if token in mapping:
+                    key = token
+                    continue
+                if key:
+                    mapping[key] = token
+                    key = None
+            if not all(mapping.values()):
+                return {"ok": False, "stdout": "", "stderr": "请补齐 --model、--base-url、--api-key。"}
+            ok, message = test_openai_compatible_provider(mapping["--model"], mapping["--api-key"], mapping["--base-url"])
+            return {"ok": ok, "stdout": message, "stderr": ""}
+        if lowered.startswith("workflow run upscale-ps"):
+            argv = shlex.split(stripped)
+            if argv[0] == "workflow":
+                argv = argv[2:]
+            else:
+                argv = argv[1:]
+            mapping = {
+                "--input-dir": "",
+                "--upscale-dir": "",
+                "--template": "",
+                "--droplet": "",
+                "--photoshop": "",
+                "--scale": "2",
             }
+            flags = {"--recurse": False, "--overwrite": False, "--close-photoshop": False}
+            key = None
+            for token in argv[1:]:
+                if token in mapping:
+                    key = token
+                    continue
+                if token in flags:
+                    flags[token] = True
+                    continue
+                if key:
+                    mapping[key] = token
+                    key = None
+            missing = [item for item in ["--input-dir", "--upscale-dir", "--template", "--droplet"] if not mapping[item]]
+            if missing:
+                return {"ok": False, "stdout": "", "stderr": f"缺少参数：{', '.join(missing)}"}
+            upscale_ok, upscale_payload = execute_command(
+                [
+                    "upscale-batch",
+                    "--input-dir",
+                    mapping["--input-dir"],
+                    "--output-dir",
+                    mapping["--upscale-dir"],
+                    "--scale",
+                    mapping["--scale"],
+                    "--mode",
+                    "quality",
+                    *(["--recurse"] if flags["--recurse"] else []),
+                    *(["--overwrite"] if flags["--overwrite"] else []),
+                ]
+            )
+            if not upscale_ok:
+                return {"ok": False, "stdout": "", "stderr": json.dumps(upscale_payload, ensure_ascii=False, indent=2)}
+            ps_argv = [
+                "ps-batch",
+                "--template",
+                mapping["--template"],
+                "--droplet",
+                mapping["--droplet"],
+                "--input-dir",
+                mapping["--upscale-dir"],
+            ]
+            if mapping["--photoshop"]:
+                ps_argv.extend(["--photoshop", mapping["--photoshop"]])
+            if flags["--close-photoshop"]:
+                ps_argv.append("--close-photoshop")
+            ps_ok, ps_payload = execute_command(ps_argv)
+            return {
+                "ok": ps_ok,
+                "stdout": "转高清结果：\n"
+                + json.dumps(upscale_payload, ensure_ascii=False, indent=2)
+                + "\n\nPhotoshop 结果：\n"
+                + json.dumps(ps_payload, ensure_ascii=False, indent=2),
+                "stderr": "",
+            }
+        if lowered.startswith("workflow run background-refresh"):
+            argv = shlex.split(stripped)
+            if argv[0] == "workflow":
+                argv = argv[2:]
+            else:
+                argv = argv[1:]
+            mapping = {
+                "--input-dir": "",
+                "--output-dir": "",
+                "--subject": "",
+                "--background": "",
+                "--matt-model": "bria-rmbg",
+                "--matt-backend": "auto",
+            }
+            flags = {"--recurse": False, "--overwrite": False}
+            key = None
+            for token in argv[1:]:
+                if token in mapping:
+                    key = token
+                    continue
+                if token in flags:
+                    flags[token] = True
+                    continue
+                if key:
+                    mapping[key] = token
+                    key = None
+            missing = [item for item in ["--input-dir", "--output-dir", "--subject", "--background"] if not mapping[item]]
+            if missing:
+                return {"ok": False, "stdout": "", "stderr": f"缺少参数：{', '.join(missing)}"}
+            ok, payload = execute_command(
+                [
+                    "background-refresh",
+                    "--input-dir",
+                    mapping["--input-dir"],
+                    "--output-dir",
+                    mapping["--output-dir"],
+                    "--subject",
+                    mapping["--subject"],
+                    "--background",
+                    mapping["--background"],
+                    "--matt-model",
+                    mapping["--matt-model"],
+                    "--matt-backend",
+                    mapping["--matt-backend"],
+                    *(["--recurse"] if flags["--recurse"] else []),
+                    *(["--overwrite"] if flags["--overwrite"] else []),
+                ]
+            )
+            return {"ok": ok, "stdout": json.dumps(payload, ensure_ascii=False, indent=2), "stderr": ""}
         if lowered.startswith("workflow run "):
             bridge_command = stripped[len("workflow run ") :]
             try:

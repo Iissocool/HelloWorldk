@@ -21,7 +21,19 @@ BackendId = Literal[
     "migraphx",
     "cpu",
 ]
-JobType = Literal["single", "batch", "smart", "rename", "image", "ai_test", "ps_batch", "agent", "cli"]
+JobType = Literal[
+    "single",
+    "batch",
+    "smart",
+    "rename",
+    "image",
+    "ai_test",
+    "ps_batch",
+    "upscale",
+    "background_replace",
+    "agent",
+    "cli",
+]
 RenameMode = Literal["template", "replace", "fresh"]
 
 
@@ -142,6 +154,26 @@ class AIImageRunRequest(BaseModel):
     quality: str = "auto"
     file_prefix: str = "image_"
     timeout_sec: int = 180
+
+
+class UpscaleRunRequest(BaseModel):
+    input_dir: str
+    output_dir: str
+    scale: int = 2
+    mode: Literal["quality", "balanced", "speed"] = "quality"
+    recurse: bool = False
+    overwrite: bool = False
+
+
+class BackgroundReplaceRunRequest(BaseModel):
+    input_dir: str
+    output_dir: str
+    subject_name: str
+    background_prompt: str
+    recurse: bool = True
+    overwrite: bool = False
+    matt_model: str = "bria-rmbg"
+    matt_backend: BackendId = "auto"
 
 
 class PhotoshopBatchRequest(BaseModel):

@@ -3,10 +3,19 @@
 import csv
 import json
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Iterable
 
-from .ai_image import generate_images, test_ai_provider
+from PIL import Image
+
+from .ai_image import generate_images, load_ai_settings, test_ai_provider
+from .background_replace import (
+    build_background_prompt,
+    choose_generation_size,
+    composite_subject_over_background,
+    image_paths_from_dir as background_image_paths_from_dir,
+)
 from .catalog import MODEL_MAP
 from .config import RUNTIME_ROOT, WORKSPACE_ROOT
 from .hardware import detect_hardware_profile
@@ -14,12 +23,14 @@ from .history import HistoryStore
 from .models import (
     AIImageRunRequest,
     AIImageTestRequest,
+    BackgroundReplaceRunRequest,
     BatchRunRequest,
     ExecutionResult,
     PhotoshopBatchRequest,
     RenameRunRequest,
     SingleRunRequest,
     SmartRunRequest,
+    UpscaleRunRequest,
 )
 from .photoshop_bridge import (
     close_photoshop_processes,
@@ -37,6 +48,7 @@ from .runtime_manager import (
     runtime_component_installed,
 )
 from .selection import analyze_image, choose_category, choose_model
+from .upscaler import image_paths_from_dir as upscale_image_paths_from_dir, upscale_image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -741,6 +753,221 @@ class LocalExecutor:
                 model="photoshop-template",
                 input_ref=str(input_dir),
                 output_ref=str(input_dir),
+                result=result,
+            )
+        return result
+
+    def run_upscale_batch(self, request: UpscaleRunRequest, *, log_history: bool = True) -> ExecutionResult:
+        input_dir = Path(request.input_dir)
+        output_dir = Path(request.output_dir)
+        if not input_dir.is_dir():
+            raise ExecutionError(f"输入目录不存在：{input_dir}")
+        if request.scale not in {2, 4}:
+            raise ExecutionError("当前转高清仅支持 2x 或 4x。")
+
+        images = upscale_image_paths_from_dir(input_dir, request.recurse)
+        if not images:
+            raise ExecutionError(f"当前目录里没有可处理图片：{input_dir}")
+
+        rows: list[dict[str, str]] = []
+        stdout_lines: list[str] = []
+        for index, input_path in enumerate(images, start=1):
+            relative = input_path.relative_to(input_dir)
+            output_path = output_dir / relative
+            if output_path.exists() and not request.overwrite:
+                rows.append(
+                    {
+                        "input": str(input_path),
+                        "output": str(output_path),
+                        "model": f"upscale:{request.mode}",
+                        "backend": "internal-pillow",
+                        "status": "skipped",
+                        "reason": "existing output",
+                    }
+                )
+                stdout_lines.append(f"[{index}/{len(images)}] skip {relative}")
+                continue
+            summary = upscale_image(input_path, output_path, scale=request.scale, mode=request.mode)
+            rows.append(
+                {
+                    "input": summary.input_path,
+                    "output": summary.output_path,
+                    "model": f"upscale:{request.mode}",
+                    "backend": "internal-pillow",
+                    "status": "ok",
+                    "reason": f"{request.scale}x",
+                }
+            )
+            stdout_lines.append(f"[{index}/{len(images)}] ok {relative} -> {request.scale}x")
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report_path = output_dir / "_upscale_report.csv"
+        with report_path.open("w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["input", "output", "model", "backend", "status", "reason"],
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+
+        result = self._aggregate_result(
+            job_type="upscale",
+            report_path=report_path,
+            rows=rows,
+            stdout_lines=stdout_lines + [f"Report: {report_path}"],
+            backends_used=["internal-pillow"],
+            models_used=[f"upscale:{request.mode}"],
+        )
+        if log_history:
+            self._log_job(
+                job_type="upscale",
+                backend="internal-pillow",
+                model=f"upscale:{request.mode}",
+                input_ref=str(input_dir),
+                output_ref=str(output_dir),
+                result=result,
+            )
+        return result
+
+    def run_background_replace(self, request: BackgroundReplaceRunRequest, *, log_history: bool = True) -> ExecutionResult:
+        input_dir = Path(request.input_dir)
+        output_dir = Path(request.output_dir)
+        if not input_dir.is_dir():
+            raise ExecutionError(f"输入目录不存在：{input_dir}")
+        if not request.subject_name.strip():
+            raise ExecutionError("请填写主体商品说明。")
+        if not request.background_prompt.strip():
+            raise ExecutionError("请填写背景修改意愿。")
+
+        ai_settings = load_ai_settings()
+        if not ai_settings.api_key.strip():
+            raise ExecutionError("当前未配置 AI 图片接口。请先在 AI 生图页或 Agent 小组件里配置可用 API。")
+        if not ai_settings.model.strip():
+            raise ExecutionError("当前未配置 AI 图片模型。")
+
+        images = background_image_paths_from_dir(input_dir, request.recurse)
+        if not images:
+            raise ExecutionError(f"当前目录里没有可处理图片：{input_dir}")
+
+        self._ensure_model_available(request.matt_model)
+        matt_backend = self.resolve_backend(request.matt_backend, request.matt_model)
+        rows: list[dict[str, str]] = []
+        stdout_lines: list[str] = []
+
+        with tempfile.TemporaryDirectory(prefix="neonpilot-bg-") as temp_dir_raw:
+            temp_dir = Path(temp_dir_raw)
+            cutout_dir = temp_dir / "cutouts"
+            generated_dir = temp_dir / "backgrounds"
+            for index, input_path in enumerate(images, start=1):
+                relative = input_path.relative_to(input_dir)
+                output_path = output_dir / relative
+                if output_path.exists() and not request.overwrite:
+                    rows.append(
+                        {
+                            "input": str(input_path),
+                            "output": str(output_path),
+                            "model": ai_settings.model,
+                            "backend": f"{matt_backend}+openai-compatible",
+                            "status": "skipped",
+                            "reason": "existing output",
+                        }
+                    )
+                    stdout_lines.append(f"[{index}/{len(images)}] skip {relative}")
+                    continue
+
+                cutout_path = cutout_dir / relative.with_suffix(".png")
+                single_result = self.run_single(
+                    SingleRunRequest(
+                        input_path=str(input_path),
+                        output_path=str(cutout_path),
+                        model=request.matt_model,
+                        backend=matt_backend,
+                    ),
+                    log_history=False,
+                )
+                if not single_result.ok:
+                    rows.append(
+                        {
+                            "input": str(input_path),
+                            "output": str(output_path),
+                            "model": request.matt_model,
+                            "backend": matt_backend,
+                            "status": "fail",
+                            "reason": (single_result.stderr or single_result.stdout).strip(),
+                        }
+                    )
+                    stdout_lines.append(f"[{index}/{len(images)}] fail cutout {relative}")
+                    continue
+
+                with Image.open(input_path) as original_image:
+                    size_label = choose_generation_size(*original_image.size)
+                prompt = build_background_prompt(request.subject_name, request.background_prompt)
+                generation = AIImageRunRequest(
+                    base_url=ai_settings.base_url,
+                    api_key=ai_settings.api_key,
+                    model=ai_settings.model,
+                    prompt=prompt,
+                    output_dir=str(generated_dir / relative.parent),
+                    image_count=1,
+                    size=size_label,
+                    quality="high",
+                    file_prefix=f"{relative.stem}_bg_",
+                    timeout_sec=ai_settings.timeout_sec,
+                )
+                try:
+                    generated_files, _logs = generate_images(generation)
+                except Exception as exc:
+                    rows.append(
+                        {
+                            "input": str(input_path),
+                            "output": str(output_path),
+                            "model": ai_settings.model,
+                            "backend": "openai-compatible",
+                            "status": "fail",
+                            "reason": str(exc),
+                        }
+                    )
+                    stdout_lines.append(f"[{index}/{len(images)}] fail background {relative}")
+                    continue
+
+                composite_subject_over_background(cutout_path, Path(generated_files[0]), output_path)
+                rows.append(
+                    {
+                        "input": str(input_path),
+                        "output": str(output_path),
+                        "model": ai_settings.model,
+                        "backend": f"{matt_backend}+openai-compatible",
+                        "status": "ok",
+                        "reason": request.background_prompt.strip(),
+                    }
+                )
+                stdout_lines.append(f"[{index}/{len(images)}] ok {relative} -> 背景已替换")
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report_path = output_dir / "_background_replace_report.csv"
+        with report_path.open("w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=["input", "output", "model", "backend", "status", "reason"],
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+
+        result = self._aggregate_result(
+            job_type="background_replace",
+            report_path=report_path,
+            rows=rows,
+            stdout_lines=stdout_lines + [f"Report: {report_path}"],
+            backends_used=[f"{matt_backend}+openai-compatible"],
+            models_used=[ai_settings.model],
+        )
+        if log_history:
+            self._log_job(
+                job_type="background_replace",
+                backend=f"{matt_backend}+openai-compatible",
+                model=ai_settings.model,
+                input_ref=str(input_dir),
+                output_ref=str(output_dir),
                 result=result,
             )
         return result

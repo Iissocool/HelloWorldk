@@ -25,7 +25,17 @@ from .hermes_adapter import (
     start_hermes_service,
     stop_hermes_service,
 )
-from .models import AIImageRunRequest, AIImageTestRequest, BatchRunRequest, PhotoshopBatchRequest, RenameRunRequest, SingleRunRequest, SmartRunRequest
+from .models import (
+    AIImageRunRequest,
+    AIImageTestRequest,
+    BackgroundReplaceRunRequest,
+    BatchRunRequest,
+    PhotoshopBatchRequest,
+    RenameRunRequest,
+    SingleRunRequest,
+    SmartRunRequest,
+    UpscaleRunRequest,
+)
 from .planner import build_runtime_plan
 from .config import PROJECT_ROOT
 from .runtime_manager import (
@@ -139,6 +149,24 @@ def build_parser() -> argparse.ArgumentParser:
     ai_gen.add_argument("--quality", default="auto")
     ai_gen.add_argument("--prefix", default="image_")
     ai_gen.add_argument("--timeout", type=int, default=180)
+
+    upscale = sub.add_parser("upscale-batch", help="Run local batch upscale workflow")
+    upscale.add_argument("--input-dir", required=True)
+    upscale.add_argument("--output-dir", required=True)
+    upscale.add_argument("--scale", type=int, default=2, choices=[2, 4])
+    upscale.add_argument("--mode", default="quality", choices=["quality", "balanced", "speed"])
+    upscale.add_argument("--recurse", action="store_true")
+    upscale.add_argument("--overwrite", action="store_true")
+
+    background_refresh = sub.add_parser("background-refresh", help="Replace backgrounds while keeping the product subject")
+    background_refresh.add_argument("--input-dir", required=True)
+    background_refresh.add_argument("--output-dir", required=True)
+    background_refresh.add_argument("--subject", required=True)
+    background_refresh.add_argument("--background", required=True)
+    background_refresh.add_argument("--recurse", action="store_true")
+    background_refresh.add_argument("--overwrite", action="store_true")
+    background_refresh.add_argument("--matt-model", default="bria-rmbg")
+    background_refresh.add_argument("--matt-backend", default="auto")
 
     ps_batch = sub.add_parser("ps-batch", help="Run Photoshop PSD + Droplet batch workflow")
     ps_batch.add_argument("--template", required=True)
@@ -272,6 +300,34 @@ def execute_namespace(args: argparse.Namespace) -> tuple[bool, dict]:
             return result.ok, result.model_dump()
         if args.command == "ai-generate":
             result = executor.run_ai_image(AIImageRunRequest(base_url=args.base_url, api_key=args.api_key, model=args.model, prompt=args.prompt, output_dir=args.output_dir, image_count=args.count, size=args.size, quality=args.quality, file_prefix=args.prefix, timeout_sec=args.timeout), log_history=False)
+            return result.ok, result.model_dump()
+        if args.command == "upscale-batch":
+            result = executor.run_upscale_batch(
+                UpscaleRunRequest(
+                    input_dir=args.input_dir,
+                    output_dir=args.output_dir,
+                    scale=args.scale,
+                    mode=args.mode,
+                    recurse=args.recurse,
+                    overwrite=args.overwrite,
+                ),
+                log_history=False,
+            )
+            return result.ok, result.model_dump()
+        if args.command == "background-refresh":
+            result = executor.run_background_replace(
+                BackgroundReplaceRunRequest(
+                    input_dir=args.input_dir,
+                    output_dir=args.output_dir,
+                    subject_name=args.subject,
+                    background_prompt=args.background,
+                    recurse=args.recurse,
+                    overwrite=args.overwrite,
+                    matt_model=args.matt_model,
+                    matt_backend=args.matt_backend,
+                ),
+                log_history=False,
+            )
             return result.ok, result.model_dump()
         if args.command == "ps-batch":
             result = executor.run_photoshop_batch(
