@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QFontDatabase, QIcon, QMovie, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -46,6 +46,7 @@ from .config import (
     APP_NAME,
     APP_TAGLINE,
     APP_VERSION,
+    BACKGROUND_GIF,
     BACKGROUND_PNG,
     DISPLAY_FONT_TTF,
     DOCS_ROOT,
@@ -97,15 +98,39 @@ class Worker(QRunnable):
 
 
 class BackgroundWidget(QWidget):
-    def __init__(self, background_path: Path | None = None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        background_path: Path | None = None,
+        background_gif_path: Path | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.background = QPixmap(str(background_path)) if background_path and background_path.exists() else QPixmap()
+        self.background_label = QLabel(self)
+        self.background_label.setObjectName("BackgroundLabel")
+        self.background_label.setScaledContents(True)
+        self.background_label.lower()
+        self.background_movie: QMovie | None = None
+        self.background_opacity = QColor(5, 10, 22, 150)
+
+        if background_gif_path and background_gif_path.exists():
+            movie = QMovie(str(background_gif_path))
+            if movie.isValid():
+                movie.setCacheMode(QMovie.CacheAll)
+                self.background_movie = movie
+                self.background_label.setMovie(movie)
+                self._update_background_geometry()
+                movie.start()
+            else:
+                self.background_label.hide()
+        else:
+            self.background_label.hide()
         self.setAutoFillBackground(False)
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor("#07111f"))
-        if not self.background.isNull():
+        if self.background_movie is None and not self.background.isNull():
             scaled = self.background.scaled(
                 self.size(),
                 Qt.KeepAspectRatioByExpanding,
@@ -115,8 +140,18 @@ class BackgroundWidget(QWidget):
             y = int((self.height() - scaled.height()) / 2)
             painter.setOpacity(0.22)
             painter.drawPixmap(x, y, scaled)
-        painter.fillRect(self.rect(), QColor(5, 10, 22, 180))
+        painter.fillRect(self.rect(), self.background_opacity)
         super().paintEvent(event)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        self._update_background_geometry()
+        super().resizeEvent(event)
+
+    def _update_background_geometry(self) -> None:
+        self.background_label.setGeometry(self.rect())
+        if self.background_movie is not None:
+            self.background_movie.setScaledSize(self.size())
+            self.background_label.show()
 
 
 class CardFrame(QFrame):
@@ -176,7 +211,7 @@ class NeonPilotQtWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(ICON_ICO)))
         self._apply_style()
 
-        root = BackgroundWidget(BACKGROUND_PNG)
+        root = BackgroundWidget(BACKGROUND_PNG, BACKGROUND_GIF)
         self.setCentralWidget(root)
         shell = QHBoxLayout(root)
         shell.setContentsMargins(24, 24, 24, 24)
