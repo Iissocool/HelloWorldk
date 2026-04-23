@@ -78,3 +78,38 @@ def run_droplet_on_folder(
 def wait_for_template_ready(wait_sec: int) -> None:
     if wait_sec > 0:
         time.sleep(wait_sec)
+
+
+def close_photoshop_processes(*, timeout_sec: int = 30) -> tuple[bool, str]:
+    completed = subprocess.run(
+        ["taskkill", "/IM", "Photoshop.exe", "/T", "/F"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout_sec,
+        check=False,
+    )
+    stdout = (completed.stdout or "").strip()
+    stderr = (completed.stderr or "").strip()
+    if completed.returncode == 0:
+        return True, stdout or "已关闭 Photoshop。"
+    combined = "\n".join(part for part in [stdout, stderr] if part).strip()
+    if "找不到进程" in combined or "not found" in combined.lower():
+        return True, "当前没有正在运行的 Photoshop 进程。"
+    deadline = time.time() + min(timeout_sec, 12)
+    while time.time() < deadline:
+        probe = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq Photoshop.exe"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+        listing = (probe.stdout or "") + (probe.stderr or "")
+        if "Photoshop.exe" not in listing:
+            return True, combined or "已关闭 Photoshop。"
+        time.sleep(0.6)
+    return False, combined or "关闭 Photoshop 失败。"

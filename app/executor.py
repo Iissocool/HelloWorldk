@@ -22,6 +22,7 @@ from .models import (
     SmartRunRequest,
 )
 from .photoshop_bridge import (
+    close_photoshop_processes,
     detect_photoshop_executable,
     image_count_in_directory,
     open_template_in_photoshop,
@@ -681,6 +682,11 @@ class LocalExecutor:
                         f"素材目录已发送给 Droplet：{input_dir}",
                         f"图片数量：{image_count}",
                         "Droplet 已启动，当前仍在 Photoshop 中继续执行。",
+                        (
+                            "已跳过自动关闭 Photoshop，因为 Droplet 还在运行。"
+                            if request.close_photoshop_when_done
+                            else ""
+                        ),
                         stdout,
                     ]
                 ).strip(),
@@ -709,6 +715,11 @@ class LocalExecutor:
             f"图片数量：{image_count}",
             "最终输出目录由该 Droplet 绑定的 Photoshop 动作决定。",
         ]
+        if request.close_photoshop_when_done:
+            closed, close_message = close_photoshop_processes()
+            stdout_lines.append(close_message)
+            if not closed:
+                stdout_lines.append("自动关闭 Photoshop 未完成。")
         result = ExecutionResult(
             ok=completed.returncode == 0 if completed is not None else True,
             command=[str(droplet_path), str(input_dir)],

@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
+import json
 import os
+import shlex
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -17,6 +19,7 @@ except Exception:
 from .ai_image import load_ai_settings, mask_api_key, save_ai_settings
 from .app_settings import load_app_settings, save_app_settings
 from .catalog import MODEL_CATALOG
+from .command_bridge import execute_command as execute_bridge_command
 from .config import APP_NAME, APP_TAGLINE, BACKGROUND_GIF, BACKGROUND_PNG, HERMES_DATA_ROOT, ICON_ICO, ICON_PNG, SPLASH_GIF, SPLASH_PNG, migrate_legacy_data
 from .executor import ExecutionError, LocalExecutor, ModelMissingError, RuntimeMissingError
 from .hardware import detect_hardware_profile
@@ -185,12 +188,14 @@ class DesktopApp:
         self.ps_photoshop_path_var = tk.StringVar(value=str(detected_photoshop) if detected_photoshop else "")
         self.ps_wait_var = tk.StringVar(value="8")
         self.ps_timeout_var = tk.StringVar(value="1800")
+        self.ps_close_when_done_var = tk.BooleanVar(value=True)
 
         self.agent_summary_var = tk.StringVar(value="尚未检测 Docker Hermes 环境")
         self.agent_docker_state_var = tk.StringVar(value="未检测")
         self.agent_hermes_state_var = tk.StringVar(value="未检测")
         self.agent_chat_state_var = tk.StringVar(value="未检测")
         self.agent_data_root_var = tk.StringVar(value=str(HERMES_DATA_ROOT))
+        self.agent_command_var = tk.StringVar()
         self.agent_model_default_var = tk.StringVar()
         self.agent_model_provider_var = tk.StringVar(value="auto")
         self.agent_model_base_url_var = tk.StringVar()
@@ -767,6 +772,7 @@ class DesktopApp:
         self._hint_label(form, "模板预热秒数：给 Photoshop 一点时间把 PSD 打开到位，再启动 Droplet。")
         self._labeled_entry(form, "最长等待秒数", self.ps_timeout_var, stretch=False, width=12)
         self._hint_label(form, "最长等待秒数：Droplet 超过这个时间还没退出，就按“已启动并继续执行”处理。")
+        ttk.Checkbutton(form, text="执行完成后自动关闭 Photoshop", variable=self.ps_close_when_done_var).pack(anchor="w", pady=(6, 2))
         action_row = ttk.Frame(form, style="Card.TFrame")
         action_row.pack(fill="x", pady=(8, 0))
         ttk.Button(action_row, text="自动检测 Photoshop", command=self._detect_photoshop_path).pack(side="left")
@@ -775,53 +781,38 @@ class DesktopApp:
         self.ps_batch_result_text = result
 
     def _build_agent_tab(self) -> None:
-        frame = ttk.Panedwindow(self.agent_tab, orient="horizontal")
-        frame.pack(fill="both", expand=True)
-        self._register_responsive_pane(frame, ratio=0.39, left_min=430, right_min=620)
-        form_shell, form = self._build_scrollable_form(frame)
-        right = ttk.Frame(frame, style="Card.TFrame", padding=10)
-        self._register_glass(right, GLASS_CARD_OPACITY)
-        frame.add(form_shell, weight=2)
-        frame.add(right, weight=3)
+        container = ttk.Frame(self.agent_tab, style="Card.TFrame", padding=12)
+        container.pack(fill="both", expand=True)
+        self._register_glass(container, GLASS_CARD_OPACITY)
 
-        self._hint_label(form, "Agent 现在只保留状态、配置和聊天终端。")
-        ttk.Label(form, text="当前状态", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 0))
-        self._labeled_readonly(form, "Docker", self.agent_docker_state_var)
-        self._labeled_readonly(form, "Hermes", self.agent_hermes_state_var)
-        self._labeled_readonly(form, "对话能力", self.agent_chat_state_var)
-        ttk.Label(form, textvariable=self.agent_summary_var, style="Subtle.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(6, 8))
-        status_row = ttk.Frame(form, style="Card.TFrame")
-        status_row.pack(fill="x", pady=(4, 8))
-        ttk.Button(status_row, text="刷新状态", command=self._refresh_agent_status).pack(side="left")
-        ttk.Button(status_row, text="一键准备 Agent", command=self._ensure_agent_ready, style="Accent.TButton").pack(side="left", padx=(8, 0))
-        ttk.Button(status_row, text="查看日志", command=self._show_agent_logs).pack(side="left", padx=(8, 0))
-        ttk.Button(status_row, text="打开数据目录", command=self._open_agent_data_dir).pack(side="left", padx=(8, 0))
+        ttk.Label(container, text="Agent 终端", style="CardTitle.TLabel").pack(anchor="w")
+        self._hint_label(container, "Agent 页现在只保留状态和终端。模型、API、工作流都直接通过命令执行。")
 
-        ttk.Label(form, text="模型与 API", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 0))
-        self._hint_label(form, "这里直接改默认模型、API Key 和兼容地址。")
-        self._labeled_combo(form, "提供方", self.agent_model_provider_var, HERMES_PROVIDER_CHOICES, stretch=False, width=24)
-        self._labeled_entry(form, "默认模型", self.agent_model_default_var, stretch=False, width=52)
-        self._labeled_entry(form, "模型 Base URL", self.agent_model_base_url_var, stretch=False, width=56)
-        self._labeled_secret_entry(form, "API Key", self.agent_api_key_var, stretch=False, width=56)
-        self._labeled_readonly(form, "API 环境变量", self.agent_api_env_var, stretch=False, width=30)
-        self._labeled_entry(form, "提供方 Base URL", self.agent_provider_base_url_var, stretch=False, width=56)
-        self._labeled_readonly(form, "Base URL 环境变量", self.agent_provider_base_env_var, stretch=False, width=30)
-        config_row = ttk.Frame(form, style="Card.TFrame")
-        config_row.pack(fill="x", pady=(4, 8))
-        ttk.Button(config_row, text="读取配置", command=self._load_agent_provider_settings).pack(side="left")
-        ttk.Button(config_row, text="保存配置", command=self._save_agent_settings, style="Accent.TButton").pack(side="left", padx=(8, 0))
-        ttk.Button(config_row, text="测试 API", command=self._run_agent_api_test).pack(side="left", padx=(8, 0))
-        ttk.Button(config_row, text="测试聊天", command=self._run_agent_chat_test).pack(side="left", padx=(8, 0))
-        ttk.Button(config_row, text="压缩配置", command=self._configure_agent_aux_provider).pack(side="left", padx=(8, 0))
+        status_bar = ttk.Frame(container, style="Card.TFrame")
+        status_bar.pack(fill="x", pady=(6, 10))
+        self._labeled_readonly(status_bar, "Docker", self.agent_docker_state_var, stretch=False, width=20)
+        self._labeled_readonly(status_bar, "Hermes", self.agent_hermes_state_var, stretch=False, width=20)
+        self._labeled_readonly(status_bar, "对话能力", self.agent_chat_state_var, stretch=False, width=24)
+        ttk.Button(status_bar, text="刷新状态", command=self._refresh_agent_status).pack(side="left", padx=(16, 0))
+        ttk.Button(status_bar, text="一键准备 Agent", command=self._ensure_agent_ready, style="Accent.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(status_bar, text="打开数据目录", command=self._open_agent_data_dir).pack(side="left", padx=(8, 0))
 
-        ttk.Label(right, text="Hermes 对话终端", style="CardTitle.TLabel").pack(anchor="w")
-        self.agent_result_text = self._make_text(right, height=20)
+        ttk.Label(container, textvariable=self.agent_summary_var, style="Subtle.TLabel", wraplength=1180, justify="left").pack(anchor="w", pady=(0, 8))
+        self._hint_label(
+            container,
+            "常用命令：help / status / agent-ready / logs / hermes --help / hermes-config-show / hermes-config-set --model ... --provider ... --base-url ... --api-key ... / ps-batch --template ... --droplet ... --input-dir ... --close-photoshop",
+        )
+
+        ttk.Label(container, text="终端输出", style="CardTitle.TLabel").pack(anchor="w", pady=(6, 0))
+        self.agent_result_text = self._make_text(container, height=24)
         self.agent_result_text.pack(fill="both", expand=True, pady=(8, 8))
-        ttk.Label(right, text="当前会话名", style="Subtle.TLabel").pack(anchor="w")
-        session_entry = tk.Entry(
-            right,
-            textvariable=self.agent_session_name_var,
-            width=28,
+
+        command_row = ttk.Frame(container, style="Card.TFrame")
+        command_row.pack(fill="x")
+        ttk.Label(command_row, text=">", style="CardTitle.TLabel").pack(side="left", padx=(0, 8))
+        command_entry = tk.Entry(
+            command_row,
+            textvariable=self.agent_command_var,
             bg=ENTRY_BG,
             fg=ENTRY_TEXT,
             insertbackground=GLOW_BLUE_SOFT,
@@ -831,35 +822,11 @@ class DesktopApp:
             highlightbackground=ENTRY_BORDER,
             highlightcolor=GLOW_BLUE_SOFT,
         )
-        self._register_glass(session_entry, GLASS_INPUT_OPACITY)
-        session_entry.pack(anchor="w", pady=(4, 8))
-        self.agent_chat_input = ScrolledText(
-            right,
-            wrap="word",
-            height=6,
-            bg="#081021",
-            fg=TEXT_MAIN,
-            insertbackground=GLOW_BLUE_SOFT,
-            relief="flat",
-            bd=0,
-            highlightthickness=1,
-            highlightbackground="#204a7a",
-            highlightcolor=BORDER_BLUE,
-        )
-        self._register_glass(self.agent_chat_input, GLASS_PANEL_OPACITY)
-        self.agent_chat_input.vbar.configure(
-            bg=SCROLL_FACE,
-            activebackground="#2f78c7",
-            troughcolor=SCROLL_TROUGH,
-            highlightthickness=0,
-            bd=0,
-            relief="flat",
-        )
-        self.agent_chat_input.pack(fill="x", pady=(0, 8))
-        chat_row = ttk.Frame(right, style="Card.TFrame")
-        chat_row.pack(fill="x")
-        ttk.Button(chat_row, text="发送消息", command=self._send_agent_message, style="Accent.TButton").pack(side="left")
-        ttk.Button(chat_row, text="清空对话", command=self._clear_agent_console).pack(side="left", padx=(8, 0))
+        self._register_glass(command_entry, GLASS_INPUT_OPACITY)
+        command_entry.pack(side="left", fill="x", expand=True)
+        command_entry.bind("<Return>", lambda _event: self._run_agent_terminal_command())
+        ttk.Button(command_row, text="运行", command=self._run_agent_terminal_command, style="Accent.TButton").pack(side="left", padx=(8, 0))
+        ttk.Button(command_row, text="清空", command=self._clear_agent_console).pack(side="left", padx=(8, 0))
 
     def _build_history_tab(self) -> None:
         controls = ttk.Frame(self.history_tab, style="Card.TFrame")
@@ -1109,6 +1076,7 @@ class DesktopApp:
             photoshop_path=self.ps_photoshop_path_var.get().strip(),
             template_wait_sec=wait_sec,
             timeout_sec=timeout_sec,
+            close_photoshop_when_done=self.ps_close_when_done_var.get(),
         )
         self._start_job("ps_batch", request, self.ps_batch_result_text)
 
@@ -1339,7 +1307,16 @@ class DesktopApp:
         self.agent_data_root_var.set(status.data_root)
         self.agent_docker_state_var.set("已运行" if status.docker_daemon_running else "未运行")
         self.agent_hermes_state_var.set("已运行" if status.service_running else "未运行")
-        provider_ready = bool(self.agent_api_key_var.get().strip()) or "不需要" in self.agent_api_env_var.get()
+        model_settings = load_hermes_model_settings()
+        provider_settings = load_hermes_provider_settings(model_settings.provider, model_settings.base_url)
+        self.agent_model_default_var.set(model_settings.default_model)
+        self.agent_model_provider_var.set(model_settings.provider or "auto")
+        self.agent_model_base_url_var.set(model_settings.base_url)
+        self.agent_api_key_var.set(provider_settings.api_key)
+        self.agent_api_env_var.set(provider_settings.api_env_key or ("auto 模式下未识别到兼容提供方" if (model_settings.provider or "auto") == "auto" else "当前提供方没有预设 API 环境变量"))
+        self.agent_provider_base_url_var.set(provider_settings.base_url)
+        self.agent_provider_base_env_var.set(provider_settings.base_url_env_key or "当前提供方没有预设 Base URL 环境变量")
+        provider_ready = bool(provider_settings.api_key.strip()) or "不需要" in self.agent_api_env_var.get()
         if status.service_running and provider_ready and is_chat_query_supported():
             chat_state = "可对话"
         elif not status.service_running:
@@ -1348,7 +1325,7 @@ class DesktopApp:
             chat_state = "需先配置 API"
         self.agent_chat_state_var.set(chat_state)
         summary = status.summary
-        if self.agent_model_provider_var.get().strip() == "auto" and self.agent_model_base_url_var.get().strip():
+        if (model_settings.provider or "auto") == "auto" and model_settings.base_url.strip():
             summary += "\n- 当前已按 OpenAI 兼容地址处理，请填写对应 API Key。"
         if status.hermes_version:
             summary += f"\n- 版本：{status.hermes_version}"
@@ -1746,54 +1723,105 @@ class DesktopApp:
 
     def _clear_agent_console(self) -> None:
         self.agent_result_text.delete("1.0", tk.END)
-        self.agent_chat_input.delete("1.0", tk.END)
-        self.status_var.set("已清空 Agent 对话")
+        self.agent_command_var.set("")
+        self.status_var.set("已清空 Agent 终端")
 
-    def _send_agent_message(self) -> None:
-        prompt = self.agent_chat_input.get("1.0", tk.END).strip()
-        if not prompt:
-            messagebox.showwarning("缺少消息", "请先输入要发给 Hermes 的内容。")
-            return
-        if self.agent_chat_state_var.get() != "可对话":
-            messagebox.showwarning("Agent 未就绪", "请先确认 Docker、Hermes 和 API 都已准备好。")
-            return
-        session_name = self.agent_session_name_var.get().strip() or "neonpilot"
-        self.app_settings.agent_session_name = session_name
-        save_app_settings(self.app_settings)
-        self.agent_result_text.insert(tk.END, f"\n你：{prompt}\n")
-        self.agent_result_text.insert(tk.END, "Hermes：处理中...\n")
+    def _append_agent_console(self, text: str) -> None:
+        if not text.endswith("\n"):
+            text += "\n"
+        self.agent_result_text.insert(tk.END, text)
         self.agent_result_text.see(tk.END)
-        self.status_var.set("正在和 Hermes 对话")
-        self.agent_chat_input.delete("1.0", tk.END)
+
+    def _agent_help_text(self) -> str:
+        return "\n".join(
+            [
+                "可用命令：",
+                "help",
+                "status",
+                "agent-ready",
+                "logs",
+                "hermes --help",
+                "hermes doctor",
+                "hermes-config-show",
+                "hermes-config-set --model deepseek-reasoner --provider auto --base-url https://api.deepseek.com/v1 --api-key <KEY>",
+                "hermes-aux-set --api-key <OPENROUTER_KEY>",
+                "ps-batch --template \"C:\\Users\\F1736\\Desktop\\模板\\昔音浴帘.psd\" --droplet \"C:\\Users\\F1736\\Desktop\\自动套图 图标.exe\" --input-dir \"W:\\你的图片目录\" --close-photoshop",
+                "single / batch / smart / rename / ai-test / ai-generate 这些 CLI 工作流命令也可以直接执行。",
+            ]
+        )
+
+    def _run_agent_terminal_command(self) -> None:
+        command = self.agent_command_var.get().strip()
+        if not command:
+            messagebox.showwarning("缺少命令", "请先输入要执行的 Agent 命令。")
+            return
+        if command.lower() == "clear":
+            self._clear_agent_console()
+            return
+        self._append_agent_console(f"> {command}")
+        self.agent_command_var.set("")
+        self.status_var.set("正在执行 Agent 命令")
 
         def worker() -> None:
             try:
-                ok, stdout, stderr = run_hermes_query(
-                    prompt,
-                    session_name=session_name,
-                    model=self.agent_model_default_var.get().strip(),
-                    provider=self.agent_model_provider_var.get().strip(),
-                    base_url=self.agent_model_base_url_var.get().strip(),
-                )
-                self.queue.put(("agent_chat", (prompt, ok, stdout, stderr)))
+                ok, stdout, stderr = self._execute_agent_terminal_command(command)
+                self.queue.put(("agent_terminal", (command, ok, stdout, stderr)))
             except Exception as exc:
-                self.queue.put(("agent_error", ("Hermes 对话", exc)))
+                self.queue.put(("agent_error", (command, exc)))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _execute_agent_terminal_command(self, command: str) -> tuple[bool, str, str]:
+        line = command.strip()
+        lowered = line.lower()
+        if lowered == "help":
+            return True, self._agent_help_text(), ""
+        if lowered == "status":
+            status = inspect_hermes_environment()
+            model_settings = load_hermes_model_settings()
+            provider_settings = load_hermes_provider_settings(model_settings.provider, model_settings.base_url)
+            docker_state = "已运行" if status.docker_daemon_running else "未运行"
+            hermes_state = "已运行" if status.service_running else "未运行"
+            chat_state = "可对话" if (status.service_running and bool(provider_settings.api_key.strip())) else ("需先启动 Hermes" if not status.service_running else "需先配置 API")
+            return True, json.dumps(
+                {
+                    "docker": docker_state,
+                    "hermes": hermes_state,
+                    "chat": chat_state,
+                    "data_root": status.data_root,
+                    "default_model": model_settings.default_model,
+                    "provider": model_settings.provider,
+                    "base_url": model_settings.base_url,
+                    "api_env": provider_settings.api_env_key,
+                    "api_key_configured": bool(provider_settings.api_key.strip()),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ), ""
+        if lowered == "agent-ready":
+            ok_docker, docker_message = start_docker_desktop()
+            if not ok_docker:
+                return False, "", docker_message
+            ok, stdout, stderr = start_hermes_service()
+            return ok, stdout or docker_message, stderr
+        if lowered == "logs":
+            return read_hermes_logs()
+        if lowered.startswith("hermes "):
+            return run_hermes_command(line)
+
+        if lowered.startswith("neonpilot "):
+            line = line.split(" ", 1)[1].strip()
+        tokens = shlex.split(line)
+        try:
+            ok, payload = execute_bridge_command(tokens)
+        except SystemExit:
+            return False, "", "命令参数无效。输入 help 查看示例命令。"
+        stdout = json.dumps(payload, ensure_ascii=False, indent=2)
+        return ok, stdout, ""
 
     def _show_agent_logs(self) -> None:
-        self.agent_result_text.delete("1.0", tk.END)
-        self.agent_result_text.insert("1.0", "正在读取 Docker Hermes 日志...\n")
-        self.status_var.set("正在读取 Hermes 日志")
-
-        def worker() -> None:
-            try:
-                ok, stdout, stderr = read_hermes_logs()
-                self.queue.put(("agent_result", ("docker logs", ok, stdout, stderr)))
-            except Exception as exc:
-                self.queue.put(("agent_error", ("docker logs", exc)))
-
-        threading.Thread(target=worker, daemon=True).start()
+        self.agent_command_var.set("logs")
+        self._run_agent_terminal_command()
 
     def _poll_queue(self) -> None:
         try:
@@ -1829,8 +1857,12 @@ class DesktopApp:
                     self.status_var.set("硬件信息已刷新" if from_refresh else "工作台已就绪")
                 elif kind == "agent_result":
                     command, ok, stdout, stderr = payload
-                    self.agent_result_text.delete("1.0", tk.END)
-                    self.agent_result_text.insert("1.0", f"command: {command}\nok: {ok}\n\nstdout:\n{stdout}\n\nstderr:\n{stderr}")
+                    self._append_agent_console(f"command: {command}\nok: {ok}\n\nstdout:\n{stdout}\n\nstderr:\n{stderr}\n")
+                    self.status_var.set("Agent 命令执行完成" if ok else "Agent 命令执行失败")
+                    self._refresh_agent_status(silent=True)
+                elif kind == "agent_terminal":
+                    command, ok, stdout, stderr = payload
+                    self._append_agent_console(f"ok: {ok}\n\nstdout:\n{stdout}\n\nstderr:\n{stderr}\n")
                     self.status_var.set("Agent 命令执行完成" if ok else "Agent 命令执行失败")
                     self._refresh_agent_status(silent=True)
                 elif kind == "resource_log":
@@ -1851,27 +1883,9 @@ class DesktopApp:
                     self.resource_status_var.set(f"{title} 失败")
                     self.status_var.set(self.resource_status_var.get())
                     messagebox.showwarning("资源操作失败", str(exc))
-                elif kind == "agent_chat":
-                    _prompt, ok, stdout, stderr = payload
-                    transcript = self.agent_result_text.get("1.0", tk.END).rstrip()
-                    if transcript.endswith("Hermes：处理中..."):
-                        transcript = transcript[: -len("Hermes：处理中...")].rstrip()
-                    response = (stdout or stderr or "").strip()
-                    block = f"{transcript}\nHermes：{response or '没有返回内容'}\n"
-                    self.agent_result_text.delete("1.0", tk.END)
-                    self.agent_result_text.insert("1.0", block.strip() + "\n")
-                    self.agent_result_text.see(tk.END)
-                    self.status_var.set("Hermes 对话完成" if ok else "Hermes 对话失败")
-                    self._refresh_agent_status(silent=True)
                 elif kind == "agent_error":
                     command, exc = payload
-                    current = self.agent_result_text.get("1.0", tk.END).strip()
-                    if current:
-                        self.agent_result_text.delete("1.0", tk.END)
-                        self.agent_result_text.insert("1.0", current + f"\n\n{command}：{exc}")
-                    else:
-                        self.agent_result_text.delete("1.0", tk.END)
-                        self.agent_result_text.insert("1.0", f"command: {command}\n\n{exc}")
+                    self._append_agent_console(f"{command}：{exc}\n")
                     self.status_var.set("Agent 命令未执行")
                     messagebox.showwarning("Agent 环境未就绪", str(exc))
         except Empty:

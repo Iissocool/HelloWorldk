@@ -151,6 +151,7 @@ class PhotoshopBatchRequest(BaseModel):
     photoshop_path: str = ""
     template_wait_sec: int = 8
     timeout_sec: int = 1800
+    close_photoshop_when_done: bool = False
 
 
 class AppSettings(BaseModel):

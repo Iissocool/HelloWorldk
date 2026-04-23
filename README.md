@@ -91,11 +91,31 @@ W:\gemini\data\neonpilot\hermes
 - `Droplet 程序`
 - `素材目录`
 - `Photoshop 程序`
+- `执行完成后自动关闭 Photoshop`
 
 说明：
 - 程序会先打开模板，再把整个文件夹发送给 Droplet
 - 当前最终输出目录仍由这个 Droplet 对应的 Photoshop 动作决定
+- 如果 Droplet 在设定等待时间内结束，程序会自动关闭 Photoshop
+- 如果 Droplet 还在持续运行，程序会先跳过自动关闭，避免中断当前套图
 - 如果后续要让 NeonPilot 直接控制导出目录，下一步应改成 Photoshop JSX / Action 桥接
+
+## Agent 终端
+Agent 页现在改成了终端优先。
+
+常用命令：
+- `help`
+- `status`
+- `agent-ready`
+- `logs`
+- `hermes-config-show`
+- `hermes-config-set --model deepseek-reasoner --provider auto --base-url https://api.deepseek.com/v1 --api-key <KEY>`
+- `ps-batch --template "..." --droplet "..." --input-dir "..." --close-photoshop`
+
+说明：
+- Docker / Hermes 状态仍然保留在终端上方
+- 模型、API、工作流通过命令直接执行
+- 不再依赖右侧一堆单独的配置按钮
 
 ## CLI 命令桥
 ```powershell
