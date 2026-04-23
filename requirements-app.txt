@@ -8,3 +8,4 @@ numpy==2.3.4
 PyYAML==6.0.3
 pywinstyles==1.8
 pywin32==311
+PySide6==6.11.0

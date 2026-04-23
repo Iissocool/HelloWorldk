@@ -1,4 +1,4 @@
-from app.desktop_app import main
+from app.desktop_qt import main
 
 
 if __name__ == "__main__":

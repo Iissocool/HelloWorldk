@@ -9,7 +9,7 @@ try {
   if (-not (Test-Path $python)) {
     throw "Python virtual environment not found: $python"
   }
-  & $python -m app.desktop_app
+  & $python -m app.desktop_qt
 }
 finally {
   Pop-Location

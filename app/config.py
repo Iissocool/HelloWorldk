@@ -8,7 +8,7 @@ from pathlib import Path
 
 APP_NAME = "NeonPilot"
 APP_SLUG = "neonpilot"
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
 APP_TAGLINE = "Cyberpunk AI imaging cockpit"
 
 IS_FROZEN = bool(getattr(sys, "frozen", False))
